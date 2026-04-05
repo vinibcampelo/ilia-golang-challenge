@@ -1,0 +1,188 @@
+openapi: 3.0.0
+info:
+  title: Microservice Users
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3002
+    description: Local
+
+tags:
+  - name: Users
+
+paths:
+  /users:
+    post:
+      summary: Create user
+      description: |
+        Creates a user. Names and email are trimmed; email is stored in lowercase.
+        Password must be at least 8 characters (Unicode runes). The password is hashed
+        with bcrypt before persistence; the API never returns the password.
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserRequest'
+            examples:
+              typical:
+                summary: Typical signup
+                description: Common payload with mixed-case email (stored lowercase).
+                value:
+                  first_name: Maria
+                  last_name: Silva
+                  email: Maria.Silva@Example.com
+                  password: Str0ngP@ss!
+              trimmedFields:
+                summary: Extra spaces on names
+                description: Leading/trailing spaces on names are stripped before validation.
+                value:
+                  first_name: "  João  "
+                  last_name: "  Souza "
+                  email: joao@example.org
+                  password: minimum8
+      responses:
+        '201':
+          description: User created. `Location` points to the new resource (`/users/{id}`).
+          headers:
+            Location:
+              description: URI of the created user (same origin path as the API).
+              schema:
+                type: string
+                example: /users/6ba7b810-9dad-11d1-80b4-00c04fd430c8
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersResponse'
+              examples:
+                createdFromTypical:
+                  summary: Response for typical signup
+                  value:
+                    id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+                    first_name: Maria
+                    last_name: Silva
+                    email: maria.silva@example.com
+                createdFromTrimmed:
+                  summary: Response after trimming names
+                  value:
+                    id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                    first_name: João
+                    last_name: Souza
+                    email: joao@example.org
+        '400':
+          description: |
+            Malformed JSON (`invalid JSON body`) or domain validation error
+            (message usually includes the underlying reason, e.g. `create user: invalid email`).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "create user: invalid email"
+              examples:
+                invalidJson:
+                  summary: Body is not valid JSON
+                  value: "invalid JSON body"
+                invalidEmail:
+                  summary: Email fails validation
+                  value: "create user: invalid email"
+                passwordTooShort:
+                  summary: Password shorter than 8 runes
+                  value: "create user: password does not meet minimum length"
+                emptyFirstName:
+                  summary: Missing or blank first name
+                  value: "create user: invalid first name"
+        '409':
+          description: Email already registered (unique constraint).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "email already registered"
+              examples:
+                duplicateEmail:
+                  summary: Same email as an existing user
+                  value: "email already registered"
+        '405':
+          description: Only `POST` is allowed on this path.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method Not Allowed
+              examples:
+                getNotAllowed:
+                  summary: GET on /users
+                  value: Method Not Allowed
+        '500':
+          description: Unexpected failure (e.g. persistence error).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Internal Server Error
+              examples:
+                generic:
+                  summary: Default server error text
+                  value: Internal Server Error
+
+components:
+  schemas:
+    UserRequest:
+      type: object
+      required:
+        - first_name
+        - last_name
+        - password
+        - email
+      properties:
+        first_name:
+          type: string
+          minLength: 1
+          example: Maria
+        last_name:
+          type: string
+          minLength: 1
+          example: Silva
+        password:
+          type: string
+          description: Minimum 8 Unicode characters.
+          minLength: 8
+          example: Str0ngP@ss!
+        email:
+          type: string
+          format: email
+          example: maria.silva@example.com
+      example:
+        first_name: Maria
+        last_name: Silva
+        email: maria.silva@example.com
+        password: Str0ngP@ss!
+    UsersResponse:
+      type: object
+      required:
+        - id
+        - first_name
+        - last_name
+        - email
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        first_name:
+          type: string
+          example: Maria
+        last_name:
+          type: string
+          example: Silva
+        email:
+          type: string
+          format: email
+          example: maria.silva@example.com
+      example:
+        id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+        first_name: Maria
+        last_name: Silva
+        email: maria.silva@example.com
