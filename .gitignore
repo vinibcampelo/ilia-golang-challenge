@@ -28,8 +28,6 @@ go.work.sum
 .env
 
 # Editor/IDE — ignore local Cursor state; commit shared rules under .cursor/rules/
-.cursor/**
-!.cursor/rules/
-!.cursor/rules/**
+.cursor/
 .idea/
 .vscode/
