@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,79 +11,65 @@ import (
 )
 
 type Config struct {
-	HTTPAddr          string
-	OpenAPISpecPath   string
-	DatabaseURL       string
-	DBMaxOpenConns    int
-	DBMaxIdleConns    int
-	DBConnMaxLifetime time.Duration
-	DBPingTimeout     time.Duration
-	BcryptCost        int
+	HTTPAddr        string
+	OpenAPISpecPath string
+	DatabaseURL     string
+	DBPingTimeout   time.Duration
+	BcryptCost      int
 }
 
 // Load reads configuration from the process environment (populate from a .env file via godotenv in main).
-// Required: PORT, DATABASE_URL. Optional keys are documented in .env.example; pool tuning falls back to
-// sensible values when unset so docker-compose does not need every knob.
+// Required: PORT, DATABASE_URL. Optional keys are documented in .env.example.
 func Load() (Config, error) {
-	port := strings.TrimSpace(os.Getenv("PORT"))
-	if port == "" {
-		return Config{}, errors.New("config: PORT is required (see .env.example)")
+	httpPort, err := requiredEnvironmentVariable("PORT")
+	if err != nil {
+		return Config{}, err
 	}
-	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
-	if dbURL == "" {
-		return Config{}, errors.New("config: DATABASE_URL is required (see .env.example)")
+	databaseURL, err := requiredEnvironmentVariable("DATABASE_URL")
+	if err != nil {
+		return Config{}, err
 	}
-	openAPIPath := strings.TrimSpace(os.Getenv("OPENAPI_SPEC"))
+	openAPISpecPath := strings.TrimSpace(os.Getenv("OPENAPI_SPEC"))
 
-	maxOpen := atoiPositiveOr(os.Getenv("DB_MAX_OPEN_CONNS"), 10)
-	maxIdle := atoiPositiveOr(os.Getenv("DB_MAX_IDLE_CONNS"), 5)
-	connLife := parseDurationOr(os.Getenv("DB_CONN_MAX_LIFETIME"), time.Hour)
-	pingTO := parseDurationOr(os.Getenv("DB_PING_TIMEOUT"), 10*time.Second)
+	pingTimeout := durationFromEnvironmentOrDefault("DB_PING_TIMEOUT", 10*time.Second)
 
 	return Config{
-		HTTPAddr:          fmt.Sprintf(":%s", port),
-		OpenAPISpecPath:   openAPIPath,
-		DatabaseURL:       dbURL,
-		DBMaxOpenConns:    maxOpen,
-		DBMaxIdleConns:    maxIdle,
-		DBConnMaxLifetime: connLife,
-		DBPingTimeout:     pingTO,
-		BcryptCost:        bcryptCostFromEnv(),
+		HTTPAddr:        fmt.Sprintf(":%s", httpPort),
+		OpenAPISpecPath: openAPISpecPath,
+		DatabaseURL:     databaseURL,
+		DBPingTimeout:   pingTimeout,
+		BcryptCost:      bcryptCostFromEnvironment(),
 	}, nil
 }
 
-func bcryptCostFromEnv() int {
-	raw := strings.TrimSpace(os.Getenv("BCRYPT_COST"))
-	if raw == "" {
-		return bcrypt.DefaultCost
+func requiredEnvironmentVariable(key string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return "", fmt.Errorf("config: %s is required (see .env.example)", key)
 	}
-	c, err := strconv.Atoi(raw)
-	if err != nil || c < bcrypt.MinCost || c > bcrypt.MaxCost {
-		return bcrypt.DefaultCost
-	}
-	return c
+	return value, nil
 }
 
-func atoiPositiveOr(s string, fallback int) int {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return fallback
+func bcryptCostFromEnvironment() int {
+	rawValue := strings.TrimSpace(os.Getenv("BCRYPT_COST"))
+	if rawValue == "" {
+		return bcrypt.DefaultCost
 	}
-	n, err := strconv.Atoi(s)
-	if err != nil || n < 1 {
-		return fallback
+	cost, err := strconv.Atoi(rawValue)
+	if err != nil || cost < bcrypt.MinCost || cost > bcrypt.MaxCost {
+		return bcrypt.DefaultCost
 	}
-	return n
+	return cost
 }
 
-func parseDurationOr(s string, fallback time.Duration) time.Duration {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return fallback
+func durationFromEnvironmentOrDefault(key string, defaultValue time.Duration) time.Duration {
+	rawValue := strings.TrimSpace(os.Getenv(key))
+	if rawValue == "" {
+		return defaultValue
 	}
-	d, err := time.ParseDuration(s)
+	parsed, err := time.ParseDuration(rawValue)
 	if err != nil {
-		return fallback
+		return defaultValue
 	}
-	return d
+	return parsed
 }

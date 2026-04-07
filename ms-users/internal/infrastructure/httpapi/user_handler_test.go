@@ -12,160 +12,195 @@ import (
 	"strings"
 	"testing"
 
+	"go.uber.org/mock/gomock"
 	"golang.org/x/crypto/bcrypt"
 
 	"ilia-golang-challenge/ms-users/internal/application/user/usecase"
 	domainuser "ilia-golang-challenge/ms-users/internal/domain/user"
+	domainusermocks "ilia-golang-challenge/ms-users/internal/domain/user/mocks"
 )
 
-type stubUserRepository struct {
-	saveErr error
+func newUserHandlerWithRepository(repository domainuser.Repository) *UserHandler {
+	return NewUserHandler(
+		usecase.NewCreateUserUseCase(repository, bcrypt.MinCost),
+		usecase.NewListUsersUseCase(repository),
+		usecase.NewGetUserUseCase(repository),
+		usecase.NewUpdateUserUseCase(repository, bcrypt.MinCost),
+		usecase.NewDeleteUserUseCase(repository),
+	)
 }
 
-func (s *stubUserRepository) Save(ctx context.Context, entity *domainuser.User) error {
-	if s.saveErr != nil {
-		return s.saveErr
-	}
-	return nil
-}
-
-func validUserJSON() string {
+func postUserValidRegistrationJSON() string {
 	return `{"first_name":"Ada","last_name":"Lovelace","email":"ada@example.com","password":"secret123"}`
 }
 
-func TestUserHandler_PostUser(t *testing.T) {
+func TestUserHandler_PostUser_success(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name           string
-		method         string
-		body           io.Reader
-		saveErr        error
-		wantCode       int
-		wantBodyPrefix string
-		wantBodySubstr string
-		checkCreated   func(t *testing.T, rr *httptest.ResponseRecorder)
+	t.Run("returns_201_with_location_header_and_json_body_without_password", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := domainusermocks.NewMockRepository(controller)
+		mockRepository.EXPECT().Save(gomock.Any(), gomock.Any()).Return(nil)
+
+		handler := newUserHandlerWithRepository(mockRepository)
+		request := httptest.NewRequest(http.MethodPost, "/users", strings.NewReader(postUserValidRegistrationJSON()))
+		request.Header.Set("Content-Type", "application/json")
+		responseRecorder := httptest.NewRecorder()
+		handler.PostUser(responseRecorder, request)
+
+		if responseRecorder.Code != http.StatusCreated {
+			t.Fatalf("status: got %d want %d, body: %s", responseRecorder.Code, http.StatusCreated, responseRecorder.Body.String())
+		}
+		if contentType := responseRecorder.Header().Get("Content-Type"); contentType != "application/json" {
+			t.Fatalf("Content-Type: got %q want application/json", contentType)
+		}
+		location := responseRecorder.Header().Get("Location")
+		if !strings.HasPrefix(location, "/users/") || len(location) <= len("/users/") {
+			t.Fatalf("Location: got %q want /users/{id}", location)
+		}
+		userIDFromLocation := strings.TrimPrefix(location, "/users/")
+		var responseBody usersResponse
+		if err := json.NewDecoder(responseRecorder.Body).Decode(&responseBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if responseBody.ID != userIDFromLocation {
+			t.Fatalf("body id %q does not match Location id %q", responseBody.ID, userIDFromLocation)
+		}
+		if responseBody.FirstName != "Ada" || responseBody.LastName != "Lovelace" || responseBody.Email != "ada@example.com" {
+			t.Fatalf("unexpected body: %+v", responseBody)
+		}
+	})
+
+	t.Run("decodes_json_normalizes_fields_and_persists_bcrypt_hashed_password", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := domainusermocks.NewMockRepository(controller)
+		var savedUser *domainuser.User
+		mockRepository.EXPECT().Save(gomock.Any(), gomock.Any()).Do(func(_ context.Context, user *domainuser.User) {
+			savedUser = user
+		}).Return(nil)
+
+		handler := newUserHandlerWithRepository(mockRepository)
+		requestBody := `{"first_name":"  Pat  ","last_name":" Kim ","email":"Pat@EXAMPLE.org","password":"abcdefgh"}`
+		request := httptest.NewRequest(http.MethodPost, "/users", bytes.NewBufferString(requestBody))
+		request.Header.Set("Content-Type", "application/json")
+		responseRecorder := httptest.NewRecorder()
+		handler.PostUser(responseRecorder, request)
+
+		if responseRecorder.Code != http.StatusCreated {
+			t.Fatalf("status: got %d body: %s", responseRecorder.Code, responseRecorder.Body.String())
+		}
+		if savedUser == nil {
+			t.Fatal("expected Save to be called")
+		}
+		if savedUser.FirstName != "Pat" || savedUser.LastName != "Kim" || savedUser.Email != "pat@example.org" {
+			t.Fatalf("use case received wrong entity: %+v", savedUser)
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(savedUser.Password), []byte("abcdefgh")); err != nil {
+			t.Fatalf("persisted password should be bcrypt of request: %v", err)
+		}
+	})
+}
+
+func TestUserHandler_PostUser_errors(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name                    string
+		requestBody             io.Reader
+		repositorySaveError     error
+		expectRepositorySave    bool
+		wantHTTPStatus          int
+		wantResponseBodyPrefix  string
+		wantResponseBodyContain string
 	}{
 		{
-			name:           "method not allowed returns 405",
-			method:         http.MethodGet,
-			body:           strings.NewReader(validUserJSON()),
-			wantCode:       http.StatusMethodNotAllowed,
-			wantBodyPrefix: http.StatusText(http.StatusMethodNotAllowed),
+			name:                   "invalid_json_returns_400",
+			requestBody:            strings.NewReader(`{not-json`),
+			expectRepositorySave:   false,
+			wantHTTPStatus:         http.StatusBadRequest,
+			wantResponseBodyPrefix: "invalid JSON body",
 		},
 		{
-			name:           "invalid JSON returns 400",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{not-json`),
-			wantCode:       http.StatusBadRequest,
-			wantBodyPrefix: "invalid JSON body",
+			name:                    "empty_first_name_returns_400_with_validation_message",
+			requestBody:             strings.NewReader(`{"first_name":"","last_name":"L","email":"a@b.co","password":"12345678"}`),
+			expectRepositorySave:    false,
+			wantHTTPStatus:          http.StatusBadRequest,
+			wantResponseBodyContain: domainuser.ErrInvalidFirstName.Error(),
 		},
 		{
-			name:           "empty first name returns 400 with validation context",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{"first_name":"","last_name":"L","email":"a@b.co","password":"12345678"}`),
-			wantCode:       http.StatusBadRequest,
-			wantBodySubstr: domainuser.ErrInvalidFirstName.Error(),
+			name:                    "empty_last_name_returns_400_with_validation_message",
+			requestBody:             strings.NewReader(`{"first_name":"A","last_name":"","email":"a@b.co","password":"12345678"}`),
+			expectRepositorySave:    false,
+			wantHTTPStatus:          http.StatusBadRequest,
+			wantResponseBodyContain: domainuser.ErrInvalidLastName.Error(),
 		},
 		{
-			name:           "empty last name returns 400",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{"first_name":"A","last_name":"","email":"a@b.co","password":"12345678"}`),
-			wantCode:       http.StatusBadRequest,
-			wantBodySubstr: domainuser.ErrInvalidLastName.Error(),
+			name:                    "invalid_email_returns_400_with_validation_message",
+			requestBody:             strings.NewReader(`{"first_name":"A","last_name":"B","email":"not-an-email","password":"12345678"}`),
+			expectRepositorySave:    false,
+			wantHTTPStatus:          http.StatusBadRequest,
+			wantResponseBodyContain: domainuser.ErrInvalidEmail.Error(),
 		},
 		{
-			name:           "invalid email returns 400",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{"first_name":"A","last_name":"B","email":"not-an-email","password":"12345678"}`),
-			wantCode:       http.StatusBadRequest,
-			wantBodySubstr: domainuser.ErrInvalidEmail.Error(),
+			name:                    "empty_password_returns_400_with_validation_message",
+			requestBody:             strings.NewReader(`{"first_name":"A","last_name":"B","email":"a@b.co","password":""}`),
+			expectRepositorySave:    false,
+			wantHTTPStatus:          http.StatusBadRequest,
+			wantResponseBodyContain: domainuser.ErrInvalidPassword.Error(),
 		},
 		{
-			name:           "empty password returns 400",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{"first_name":"A","last_name":"B","email":"a@b.co","password":""}`),
-			wantCode:       http.StatusBadRequest,
-			wantBodySubstr: domainuser.ErrInvalidPassword.Error(),
+			name:                    "password_too_short_returns_400_with_validation_message",
+			requestBody:             strings.NewReader(`{"first_name":"A","last_name":"B","email":"a@b.co","password":"short"}`),
+			expectRepositorySave:    false,
+			wantHTTPStatus:          http.StatusBadRequest,
+			wantResponseBodyContain: domainuser.ErrPasswordTooShort.Error(),
 		},
 		{
-			name:           "password too short returns 400",
-			method:         http.MethodPost,
-			body:           strings.NewReader(`{"first_name":"A","last_name":"B","email":"a@b.co","password":"short"}`),
-			wantCode:       http.StatusBadRequest,
-			wantBodySubstr: domainuser.ErrPasswordTooShort.Error(),
+			name:                   "duplicate_email_from_repository_returns_409",
+			requestBody:            strings.NewReader(postUserValidRegistrationJSON()),
+			repositorySaveError:    fmt.Errorf("save user: %w", usecase.ErrEmailAlreadyExists),
+			expectRepositorySave:   true,
+			wantHTTPStatus:         http.StatusConflict,
+			wantResponseBodyPrefix: usecase.ErrEmailAlreadyExists.Error(),
 		},
 		{
-			name:           "duplicate email returns 409",
-			method:         http.MethodPost,
-			body:           strings.NewReader(validUserJSON()),
-			saveErr:        fmt.Errorf("save user: %w", domainuser.ErrEmailAlreadyExists),
-			wantCode:       http.StatusConflict,
-			wantBodyPrefix: domainuser.ErrEmailAlreadyExists.Error(),
-		},
-		{
-			name:           "repository error returns 500",
-			method:         http.MethodPost,
-			body:           strings.NewReader(validUserJSON()),
-			saveErr:        errors.New("persist failed"),
-			wantCode:       http.StatusInternalServerError,
-			wantBodyPrefix: http.StatusText(http.StatusInternalServerError),
-		},
-		{
-			name:     "success returns 201 location and JSON body without password",
-			method:   http.MethodPost,
-			body:     strings.NewReader(validUserJSON()),
-			wantCode: http.StatusCreated,
-			checkCreated: func(t *testing.T, rr *httptest.ResponseRecorder) {
-				t.Helper()
-				if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
-					t.Fatalf("Content-Type: got %q want application/json", ct)
-				}
-				loc := rr.Header().Get("Location")
-				if !strings.HasPrefix(loc, "/users/") || len(loc) <= len("/users/") {
-					t.Fatalf("Location: got %q want /users/{id}", loc)
-				}
-				id := strings.TrimPrefix(loc, "/users/")
-				var got usersResponse
-				if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
-					t.Fatalf("decode body: %v", err)
-				}
-				if got.ID != id {
-					t.Fatalf("body id %q does not match Location id %q", got.ID, id)
-				}
-				if got.FirstName != "Ada" || got.LastName != "Lovelace" || got.Email != "ada@example.com" {
-					t.Fatalf("unexpected body: %+v", got)
-				}
-			},
+			name:                   "repository_failure_returns_500",
+			requestBody:            strings.NewReader(postUserValidRegistrationJSON()),
+			repositorySaveError:    errors.New("persist failed"),
+			expectRepositorySave:   true,
+			wantHTTPStatus:         http.StatusInternalServerError,
+			wantResponseBodyPrefix: http.StatusText(http.StatusInternalServerError),
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
+			controller := gomock.NewController(t)
+			mockRepository := domainusermocks.NewMockRepository(controller)
+			if testCase.expectRepositorySave {
+				mockRepository.EXPECT().Save(gomock.Any(), gomock.Any()).Return(testCase.repositorySaveError)
+			}
 
-			repo := &stubUserRepository{saveErr: tt.saveErr}
-			h := NewUserHandler(usecase.NewCreateUserUseCase(repo, bcrypt.MinCost))
+			handler := newUserHandlerWithRepository(mockRepository)
+			request := httptest.NewRequest(http.MethodPost, "/users", testCase.requestBody)
+			if testCase.requestBody != nil {
+				request.Header.Set("Content-Type", "application/json")
+			}
+			responseRecorder := httptest.NewRecorder()
+			handler.PostUser(responseRecorder, request)
 
-			req := httptest.NewRequest(tt.method, "/users", tt.body)
-			if tt.body != nil {
-				req.Header.Set("Content-Type", "application/json")
+			if responseRecorder.Code != testCase.wantHTTPStatus {
+				t.Fatalf("status: got %d want %d, body: %s", responseRecorder.Code, testCase.wantHTTPStatus, responseRecorder.Body.String())
 			}
-			rr := httptest.NewRecorder()
-			h.PostUser(rr, req)
-
-			if rr.Code != tt.wantCode {
-				t.Fatalf("status: got %d want %d, body: %s", rr.Code, tt.wantCode, rr.Body.String())
+			responseBody := strings.TrimSpace(responseRecorder.Body.String())
+			if testCase.wantResponseBodyPrefix != "" && !strings.HasPrefix(responseBody, testCase.wantResponseBodyPrefix) {
+				t.Fatalf("body prefix: got %q want prefix %q", responseBody, testCase.wantResponseBodyPrefix)
 			}
-			body := strings.TrimSpace(rr.Body.String())
-			if tt.wantBodyPrefix != "" && !strings.HasPrefix(body, tt.wantBodyPrefix) {
-				t.Fatalf("body prefix: got %q want prefix %q", body, tt.wantBodyPrefix)
-			}
-			if tt.wantBodySubstr != "" && !strings.Contains(body, tt.wantBodySubstr) {
-				t.Fatalf("body: got %q want substring %q", body, tt.wantBodySubstr)
-			}
-			if tt.checkCreated != nil {
-				tt.checkCreated(t, rr)
+			if testCase.wantResponseBodyContain != "" && !strings.Contains(responseBody, testCase.wantResponseBodyContain) {
+				t.Fatalf("body: got %q want substring %q", responseBody, testCase.wantResponseBodyContain)
 			}
 		})
 	}
@@ -174,85 +209,49 @@ func TestUserHandler_PostUser(t *testing.T) {
 func TestIsUserRegistrationValidationError(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		err  error
-		want bool
+	testCases := []struct {
+		name              string
+		inputError        error
+		expectedRecognize bool
 	}{
 		{
-			name: "direct invalid first name",
-			err:  domainuser.ErrInvalidFirstName,
-			want: true,
+			name:              "direct_ErrInvalidFirstName",
+			inputError:        domainuser.ErrInvalidFirstName,
+			expectedRecognize: true,
 		},
 		{
-			name: "wrapped validation error",
-			err:  errors.Join(errors.New("outer"), domainuser.ErrInvalidEmail),
-			want: true,
+			name:              "wrapped_with_errors_join",
+			inputError:        errors.Join(errors.New("outer"), domainuser.ErrInvalidEmail),
+			expectedRecognize: true,
 		},
 		{
-			name: "wrapped with fmt like use case",
-			err:  fmt.Errorf("create user: %w", domainuser.ErrPasswordTooShort),
-			want: true,
+			name:              "wrapped_with_fmt_like_create_use_case",
+			inputError:        fmt.Errorf("create user: %w", domainuser.ErrPasswordTooShort),
+			expectedRecognize: true,
 		},
 		{
-			name: "email already exists is not validation",
-			err:  domainuser.ErrEmailAlreadyExists,
-			want: false,
+			name:              "ErrEmailAlreadyExists_is_not_validation",
+			inputError:        usecase.ErrEmailAlreadyExists,
+			expectedRecognize: false,
 		},
 		{
-			name: "generic error",
-			err:  errors.New("database down"),
-			want: false,
+			name:              "generic_error",
+			inputError:        errors.New("database down"),
+			expectedRecognize: false,
 		},
 		{
-			name: "nil",
-			err:  nil,
-			want: false,
+			name:              "nil_error",
+			inputError:        nil,
+			expectedRecognize: false,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-			if got := isUserRegistrationValidationError(tt.err); got != tt.want {
-				t.Fatalf("isUserRegistrationValidationError(%v) = %v, want %v", tt.err, got, tt.want)
+			if got := isUserRegistrationValidationError(testCase.inputError); got != testCase.expectedRecognize {
+				t.Fatalf("isUserRegistrationValidationError(%v) = %v, want %v", testCase.inputError, got, testCase.expectedRecognize)
 			}
 		})
 	}
-}
-
-func TestUserHandler_PostUser_decodeMapsAllFieldsToUseCase(t *testing.T) {
-	t.Parallel()
-
-	repo := &stubCaptureRepository{}
-	h := NewUserHandler(usecase.NewCreateUserUseCase(repo, bcrypt.MinCost))
-
-	body := `{"first_name":"  Pat  ","last_name":" Kim ","email":"Pat@EXAMPLE.org","password":"abcdefgh"}`
-	req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewBufferString(body))
-	req.Header.Set("Content-Type", "application/json")
-	rr := httptest.NewRecorder()
-	h.PostUser(rr, req)
-
-	if rr.Code != http.StatusCreated {
-		t.Fatalf("status: got %d body: %s", rr.Code, rr.Body.String())
-	}
-	if repo.saved == nil {
-		t.Fatal("expected Save to be called")
-	}
-	u := repo.saved
-	if u.FirstName != "Pat" || u.LastName != "Kim" || u.Email != "pat@example.org" {
-		t.Fatalf("use case received wrong entity: %+v", u)
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(u.Password), []byte("abcdefgh")); err != nil {
-		t.Fatalf("persisted password should be bcrypt of request: %v", err)
-	}
-}
-
-type stubCaptureRepository struct {
-	saved *domainuser.User
-}
-
-func (s *stubCaptureRepository) Save(ctx context.Context, entity *domainuser.User) error {
-	s.saved = entity
-	return nil
 }

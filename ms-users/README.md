@@ -52,13 +52,21 @@ go run ./cmd/api
 
 ## Docker Compose (Postgres + API)
 
-Na pasta `ms-users`:
+Na pasta `ms-users`, o Compose usa `--env-file` explícito:
+
+| Comando | Arquivo de variáveis (substituição no `docker-compose.yml`) |
+|---------|--------------------------------------------------------------|
+| `make up` ou `make up-dev` | `.env` (o `setup` cria a partir de `.env.example` se faltar) |
+| `make up-example` | `.env.example` |
+| `make up-prod` | `.env.prod` (`setup-prod` se necessário) |
 
 ```bash
-make up
+make up-dev      # ou: make up (alias)
+make up-example
+make up-prod
 ```
 
-- API: porta **3002** (ou valor de `PORT` no ambiente do host).
+- API: porta **3002** por padrão (ou `PORT` no arquivo usado pelo `up-*`).
 - Postgres: usuário/senha/db `users`, porta publicada **5432**.
 
 Encerrar:
@@ -78,6 +86,8 @@ make ps
 
 - **Base local:** `http://localhost:3002` (ajuste se mudar `PORT`).
 - **Criar usuário:** `POST /users` — corpo JSON com `first_name`, `last_name`, `email`, `password` (ver contrato em [`ms-users.yaml`](ms-users.yaml)).
+- **Listar / obter / atualizar:** `GET /users`, `GET /users/{id}`, `PATCH /users/{id}` — apenas usuários **ativos** (`deleted_at` nulo).
+- **Remover:** `DELETE /users/{id}` — **exclusão lógica** (`deleted_at` preenchido); o e-mail pode ser reutilizado em novo cadastro.
 - **OpenAPI em YAML:** [`ms-users.yaml`](ms-users.yaml).
 - **Swagger UI** (se `OPENAPI_SPEC` apontar para o arquivo): `GET /swagger/` e `GET /openapi.yaml`.
 

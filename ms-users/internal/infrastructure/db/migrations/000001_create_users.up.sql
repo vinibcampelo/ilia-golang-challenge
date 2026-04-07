@@ -4,7 +4,9 @@ CREATE TABLE users (
     last_name TEXT NOT NULL,
     email TEXT NOT NULL,
     password TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX users_email_key ON users (email);
+-- Unique email only among active rows (soft delete allows reusing email).
+CREATE UNIQUE INDEX users_email_active_key ON users (email) WHERE deleted_at IS NULL;

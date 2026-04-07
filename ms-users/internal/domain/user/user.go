@@ -7,15 +7,14 @@ import (
 	"unicode/utf8"
 )
 
-const minPasswordRunes = 8
+const minPasswordLengthRunes = 8
 
 var (
-	ErrInvalidFirstName   = errors.New("invalid first name")
-	ErrInvalidLastName    = errors.New("invalid last name")
-	ErrInvalidEmail       = errors.New("invalid email")
-	ErrInvalidPassword    = errors.New("invalid password")
-	ErrPasswordTooShort   = errors.New("password does not meet minimum length")
-	ErrEmailAlreadyExists = errors.New("email already registered")
+	ErrInvalidFirstName = errors.New("invalid first name")
+	ErrInvalidLastName  = errors.New("invalid last name")
+	ErrInvalidEmail     = errors.New("invalid email")
+	ErrInvalidPassword  = errors.New("invalid password")
+	ErrPasswordTooShort = errors.New("password does not meet minimum length")
 )
 
 type User struct {
@@ -23,34 +22,38 @@ type User struct {
 	FirstName string
 	LastName  string
 	Email     string
-	// Password is plaintext after NewUser; the create-user use case replaces it with a bcrypt hash before Repository.Save.
-	Password string
+	Password  string
 }
 
-func NewUser(id, rawFirstName, rawLastName, rawEmail, rawPassword string) (*User, error) {
-	firstName := strings.TrimSpace(rawFirstName)
-	if firstName == "" {
-		return nil, ErrInvalidFirstName
+type UserUpdate struct {
+	FirstName *string
+	LastName  *string
+	Email     *string
+	Password  *string
+}
+
+func (update UserUpdate) IsEmpty() bool {
+	return update.FirstName == nil && update.LastName == nil && update.Email == nil && update.Password == nil
+}
+
+func New(userID, rawFirstName, rawLastName, rawEmail, rawPassword string) (*User, error) {
+	firstName, err := TrimmedNonEmptyName(rawFirstName, ErrInvalidFirstName)
+	if err != nil {
+		return nil, err
 	}
-	lastName := strings.TrimSpace(rawLastName)
-	if lastName == "" {
-		return nil, ErrInvalidLastName
+	lastName, err := TrimmedNonEmptyName(rawLastName, ErrInvalidLastName)
+	if err != nil {
+		return nil, err
 	}
-	email := strings.TrimSpace(strings.ToLower(rawEmail))
-	if email == "" {
-		return nil, ErrInvalidEmail
+	email, err := NormalizeEmail(rawEmail)
+	if err != nil {
+		return nil, err
 	}
-	if err := ensureBareEmailAddress(email); err != nil {
-		return nil, ErrInvalidEmail
-	}
-	if rawPassword == "" {
-		return nil, ErrInvalidPassword
-	}
-	if utf8.RuneCountInString(rawPassword) < minPasswordRunes {
-		return nil, ErrPasswordTooShort
+	if err := ValidatePasswordLength(rawPassword); err != nil {
+		return nil, err
 	}
 	return &User{
-		ID:        id,
+		ID:        userID,
 		FirstName: firstName,
 		LastName:  lastName,
 		Email:     email,
@@ -58,14 +61,73 @@ func NewUser(id, rawFirstName, rawLastName, rawEmail, rawPassword string) (*User
 	}, nil
 }
 
-func ensureBareEmailAddress(email string) error {
-	addr, err := mail.ParseAddress(email)
+func (user *User) Update(changes UserUpdate) error {
+	if changes.FirstName != nil {
+		firstName, err := TrimmedNonEmptyName(*changes.FirstName, ErrInvalidFirstName)
+		if err != nil {
+			return err
+		}
+		user.FirstName = firstName
+	}
+	if changes.LastName != nil {
+		lastName, err := TrimmedNonEmptyName(*changes.LastName, ErrInvalidLastName)
+		if err != nil {
+			return err
+		}
+		user.LastName = lastName
+	}
+	if changes.Email != nil {
+		email, err := NormalizeEmail(*changes.Email)
+		if err != nil {
+			return err
+		}
+		user.Email = email
+	}
+	if changes.Password != nil {
+		if err := ValidatePasswordLength(*changes.Password); err != nil {
+			return err
+		}
+		user.Password = *changes.Password
+	}
+	return nil
+}
+
+func ensureBareEmailAddress(mailbox string) error {
+	parsedAddress, err := mail.ParseAddress(mailbox)
 	if err != nil {
 		return err
 	}
-	// Reject "Name <mailbox>" — registration accepts a single mailbox only.
-	if addr.Name != "" {
+	if parsedAddress.Name != "" {
 		return errors.New("email must not include display name")
+	}
+	return nil
+}
+
+func NormalizeEmail(raw string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(raw))
+	if normalized == "" {
+		return "", ErrInvalidEmail
+	}
+	if err := ensureBareEmailAddress(normalized); err != nil {
+		return "", ErrInvalidEmail
+	}
+	return normalized, nil
+}
+
+func TrimmedNonEmptyName(raw string, emptyErr error) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "", emptyErr
+	}
+	return trimmed, nil
+}
+
+func ValidatePasswordLength(raw string) error {
+	if raw == "" {
+		return ErrInvalidPassword
+	}
+	if utf8.RuneCountInString(raw) < minPasswordLengthRunes {
+		return ErrPasswordTooShort
 	}
 	return nil
 }

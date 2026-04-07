@@ -18,61 +18,83 @@ import (
 	"ilia-golang-challenge/ms-users/internal/infrastructure/persistence"
 )
 
-func loadDotenv() {
-	name := strings.TrimSpace(os.Getenv("DOTENV_FILE"))
-	if name == "" {
-		name = ".env"
-	}
-	_ = godotenv.Load(name)
-}
-
 func main() {
-	loadDotenv()
+	loadEnvFile()
 
-	cfg, err := config.Load()
+	configuration, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	sqlDB, err := sql.Open("pgx", cfg.DatabaseURL)
+	mustRunMigrations(configuration.DatabaseURL)
+
+	dbConn := mustOpenDB(configuration)
+	defer func() {
+		if err := dbConn.Close(); err != nil {
+			log.Printf("database close: %v", err)
+		}
+	}()
+
+	openAPISpecBytes := loadSwaggerSpecBytesOrNil(configuration.OpenAPISpecPath)
+	router := buildRouter(dbConn, configuration, openAPISpecBytes)
+
+	log.Printf("ms-users listening on %s", configuration.HTTPAddr)
+	if err := http.ListenAndServe(configuration.HTTPAddr, router); err != nil {
+		log.Fatalf("http serve: %v", err)
+	}
+}
+
+func loadEnvFile() {
+	envFilename := strings.TrimSpace(os.Getenv("DOTENV_FILE"))
+	if envFilename == "" {
+		envFilename = ".env"
+	}
+	_ = godotenv.Load(envFilename)
+}
+
+func mustOpenDB(configuration config.Config) *sql.DB {
+	dbConn, err := sql.Open("pgx", configuration.DatabaseURL)
 	if err != nil {
 		log.Fatalf("database open: %v", err)
 	}
-	defer sqlDB.Close()
 
-	sqlDB.SetMaxOpenConns(cfg.DBMaxOpenConns)
-	sqlDB.SetMaxIdleConns(cfg.DBMaxIdleConns)
-	sqlDB.SetConnMaxLifetime(cfg.DBConnMaxLifetime)
-
-	pingCtx, cancel := context.WithTimeout(context.Background(), cfg.DBPingTimeout)
+	pingContext, cancel := context.WithTimeout(context.Background(), configuration.DBPingTimeout)
 	defer cancel()
-	if err := sqlDB.PingContext(pingCtx); err != nil {
+	if err := dbConn.PingContext(pingContext); err != nil {
 		log.Fatalf("database ping: %v", err)
 	}
 
-	if err := db.RunMigrations(sqlDB); err != nil {
+	return dbConn
+}
+
+func mustRunMigrations(databaseURL string) {
+	if err := db.RunMigrations(databaseURL); err != nil {
 		log.Fatalf("migrations: %v", err)
 	}
+}
 
-	var openAPISpec []byte
-	path := strings.TrimSpace(cfg.OpenAPISpecPath)
-	if path != "" && path != "-" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			log.Printf("swagger: skipping UI (could not read %q: %v)", path, err)
-		} else {
-			openAPISpec = b
-			log.Printf("swagger UI: /swagger/ (OpenAPI %q)", path)
-		}
+func loadSwaggerSpecBytesOrNil(openAPISpecPath string) []byte {
+	openAPISpecPath = strings.TrimSpace(openAPISpecPath)
+	if openAPISpecPath == "" || openAPISpecPath == "-" {
+		return nil
 	}
-
-	repo := persistence.NewPostgresUserRepository(sqlDB)
-	createUserUseCase := usecase.NewCreateUserUseCase(repo, cfg.BcryptCost)
-	userHandler := httpapi.NewUserHandler(createUserUseCase)
-	router := httpapi.NewRouter(userHandler, openAPISpec)
-
-	log.Printf("ms-users listening on %s", cfg.HTTPAddr)
-	if err := http.ListenAndServe(cfg.HTTPAddr, router); err != nil {
-		log.Fatal(err)
+	openAPISpecBytes, err := os.ReadFile(openAPISpecPath)
+	if err != nil {
+		log.Printf("swagger: skipping UI (could not read %q: %v)", openAPISpecPath, err)
+		return nil
 	}
+	log.Printf("swagger UI: /swagger/ (OpenAPI %q)", openAPISpecPath)
+	return openAPISpecBytes
+}
+
+func buildRouter(dbConn *sql.DB, configuration config.Config, openAPISpecBytes []byte) http.Handler {
+	repo := persistence.NewPostgresUserRepository(dbConn)
+	userHandler := httpapi.NewUserHandler(
+		usecase.NewCreateUserUseCase(repo, configuration.BcryptCost),
+		usecase.NewListUsersUseCase(repo),
+		usecase.NewGetUserUseCase(repo),
+		usecase.NewUpdateUserUseCase(repo, configuration.BcryptCost),
+		usecase.NewDeleteUserUseCase(repo),
+	)
+	return httpapi.NewRouter(userHandler, openAPISpecBytes)
 }
