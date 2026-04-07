@@ -2,15 +2,15 @@ services:
   postgres:
     image: postgres:17-alpine
     environment:
-      POSTGRES_USER: users
-      POSTGRES_PASSWORD: users
-      POSTGRES_DB: users
+      POSTGRES_USER: ${POSTGRES_USER:-users}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-users}
+      POSTGRES_DB: ${POSTGRES_DB:-users}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U users -d users"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 3s
       timeout: 3s
       retries: 10
@@ -22,7 +22,7 @@ services:
         condition: service_healthy
     environment:
       PORT: ${PORT:-3002}
-      DATABASE_URL: postgres://users:users@postgres:5432/users?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER:-users}:${POSTGRES_PASSWORD:-users}@postgres:5432/${POSTGRES_DB:-users}?sslmode=disable
       OPENAPI_SPEC: /app/ms-users.yaml
     ports:
       - "${PORT:-3002}:${PORT:-3002}"

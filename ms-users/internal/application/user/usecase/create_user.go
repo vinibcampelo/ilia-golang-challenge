@@ -17,43 +17,49 @@ type CreateUserInput struct {
 	Password  string
 }
 
-type CreateUserOutput struct {
-	ID        string
-	FirstName string
-	LastName  string
-	Email     string
-}
+// CreateUserOutput matches UserView for create responses.
+type CreateUserOutput = UserView
 
 type CreateUserUseCase struct {
-	repo       domainuser.Repository
+	repository domainuser.Repository
 	bcryptCost int
 }
 
-func NewCreateUserUseCase(repo domainuser.Repository, bcryptCost int) *CreateUserUseCase {
+func NewCreateUserUseCase(repository domainuser.Repository, bcryptCost int) *CreateUserUseCase {
 	if bcryptCost == 0 {
 		bcryptCost = bcrypt.DefaultCost
 	}
-	return &CreateUserUseCase{repo: repo, bcryptCost: bcryptCost}
+	return &CreateUserUseCase{repository: repository, bcryptCost: bcryptCost}
 }
 
-func (uc *CreateUserUseCase) Execute(ctx context.Context, input CreateUserInput) (*CreateUserOutput, error) {
-	id := uuid.NewString()
-	user, err := domainuser.NewUser(id, input.FirstName, input.LastName, input.Email, input.Password)
+func (useCase *CreateUserUseCase) Execute(ctx context.Context, input CreateUserInput) (*CreateUserOutput, error) {
+	userID := uuid.NewString()
+	password := input.Password
+
+	createdUser, err := domainuser.New(
+		userID,
+		input.FirstName,
+		input.LastName,
+		input.Email,
+		password,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create user: %w", err)
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), uc.bcryptCost)
+
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(password), useCase.bcryptCost)
 	if err != nil {
 		return nil, fmt.Errorf("hash password: %w", err)
 	}
-	user.Password = string(hash)
-	if err := uc.repo.Save(ctx, user); err != nil {
+	createdUser.Password = string(passwordHash)
+
+	if err := useCase.repository.Save(ctx, createdUser); err != nil {
 		return nil, fmt.Errorf("persist user: %w", err)
 	}
-	return &CreateUserOutput{
-		ID:        user.ID,
-		FirstName: user.FirstName,
-		LastName:  user.LastName,
-		Email:     user.Email,
+	return &UserView{
+		ID:        createdUser.ID,
+		FirstName: createdUser.FirstName,
+		LastName:  createdUser.LastName,
+		Email:     createdUser.Email,
 	}, nil
 }

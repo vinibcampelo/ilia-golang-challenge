@@ -12,6 +12,59 @@ tags:
 
 paths:
   /users:
+    get:
+      summary: List users
+      description: |
+        Returns all users that are not soft-deleted, ordered by `created_at` ascending.
+        Passwords are never included. An empty JSON array is returned when there are no users.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: JSON array of users (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UsersResponse'
+              examples:
+                multiple:
+                  summary: Two users
+                  value:
+                    - id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+                      first_name: Maria
+                      last_name: Silva
+                      email: maria@example.com
+                    - id: 7c9e6679-7425-40de-944b-e07fc1f90ae7
+                      first_name: João
+                      last_name: Souza
+                      email: joao@example.org
+                empty:
+                  summary: No users yet
+                  value: []
+        '405':
+          description: Only `GET` and `POST` are allowed on this path.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method Not Allowed
+              examples:
+                patchNotAllowed:
+                  summary: PATCH on /users
+                  value: Method Not Allowed
+        '500':
+          description: Unexpected failure (e.g. persistence error).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Internal Server Error
+              examples:
+                generic:
+                  summary: Default server error text
+                  value: Internal Server Error
     post:
       summary: Create user
       description: |
@@ -105,15 +158,15 @@ paths:
                   summary: Same email as an existing user
                   value: "email already registered"
         '405':
-          description: Only `POST` is allowed on this path.
+          description: Only `GET` and `POST` are allowed on this path.
           content:
             text/plain:
               schema:
                 type: string
                 example: Method Not Allowed
               examples:
-                getNotAllowed:
-                  summary: GET on /users
+                putNotAllowed:
+                  summary: PUT on /users
                   value: Method Not Allowed
         '500':
           description: Unexpected failure (e.g. persistence error).
@@ -127,7 +180,233 @@ paths:
                   summary: Default server error text
                   value: Internal Server Error
 
+  /users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      summary: Get user by id
+      description: |
+        Returns a single user by UUID. Password is never included.
+      tags:
+        - Users
+      responses:
+        '200':
+          description: User found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersResponse'
+              examples:
+                found:
+                  summary: Existing user
+                  value:
+                    id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+                    first_name: Maria
+                    last_name: Silva
+                    email: maria@example.com
+        '400':
+          description: Path `id` is not a valid UUID.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "invalid user id"
+              examples:
+                invalidUUID:
+                  summary: Not a UUID
+                  value: "invalid user id"
+        '404':
+          description: No active user with that id (or soft-deleted).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "user not found"
+              examples:
+                missing:
+                  summary: Unknown id
+                  value: "user not found"
+        '405':
+          description: Only `GET`, `PATCH`, and `DELETE` are allowed on this path.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method Not Allowed
+        '500':
+          description: Unexpected failure (e.g. persistence error).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Internal Server Error
+              examples:
+                generic:
+                  summary: Default server error text
+                  value: Internal Server Error
+    patch:
+      summary: Partially update user
+      description: |
+        Updates only fields present in the JSON body (omit a field to leave it unchanged).
+        Same normalization and validation rules as create apply to provided fields.
+        Password, when sent, must meet the minimum length; it is re-hashed with bcrypt before save.
+        Sending an empty object (`{}`) is rejected (`no fields to update`).
+      tags:
+        - Users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserPatchRequest'
+            examples:
+              nameAndEmail:
+                summary: Change first name and email
+                value:
+                  first_name: Ana
+                  email: Ana@Example.com
+              passwordOnly:
+                summary: Rotate password only
+                value:
+                  password: newSecret12
+              trimmedLastName:
+                summary: Trimmed last name
+                value:
+                  last_name: "  Costa  "
+              emptyBodyRejected:
+                summary: Rejected by API (no fields)
+                description: Results in 400 `no fields to update`.
+                value: {}
+      responses:
+        '200':
+          description: Updated user (password never returned).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersResponse'
+              examples:
+                updated:
+                  summary: After name and email patch
+                  value:
+                    id: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+                    first_name: Ana
+                    last_name: Silva
+                    email: ana@example.com
+        '400':
+          description: |
+            Malformed JSON, invalid path id, no fields in body, or domain validation error
+            on a provided field (message often prefixed with `update user:`).
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                invalidJson:
+                  summary: Body is not valid JSON
+                  value: "invalid JSON body"
+                invalidId:
+                  summary: Path id is not a UUID
+                  value: "invalid user id"
+                noFields:
+                  summary: Empty patch object
+                  value: "no fields to update"
+                invalidEmail:
+                  summary: Email fails validation
+                  value: "update user: invalid email"
+                emptyFirstName:
+                  summary: first_name sent as empty string
+                  value: "update user: invalid first name"
+        '404':
+          description: No active user with that id (or soft-deleted).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "user not found"
+        '409':
+          description: New email already used by another user.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "email already registered"
+              examples:
+                duplicateEmail:
+                  summary: Unique email violation
+                  value: "email already registered"
+        '405':
+          description: Only `GET`, `PATCH`, and `DELETE` are allowed on this path.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method Not Allowed
+        '500':
+          description: Unexpected failure (e.g. persistence error).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Internal Server Error
+              examples:
+                generic:
+                  summary: Default server error text
+                  value: Internal Server Error
+    delete:
+      summary: Delete user (soft delete)
+      description: |
+        Soft-deletes the user (`deleted_at` set). The row remains for audit; the user no longer
+        appears in list/get. Successful response has no body (`204 No Content`).
+      tags:
+        - Users
+      responses:
+        '204':
+          description: User soft-deleted.
+        '400':
+          description: Path `id` is not a valid UUID.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "invalid user id"
+        '404':
+          description: No active user with that id.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "user not found"
+        '405':
+          description: Only `GET`, `PATCH`, and `DELETE` are allowed on this path.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Method Not Allowed
+        '500':
+          description: Unexpected failure (e.g. persistence error).
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Internal Server Error
+              examples:
+                generic:
+                  summary: Default server error text
+                  value: Internal Server Error
+
 components:
+  parameters:
+    UserIdPath:
+      name: id
+      in: path
+      required: true
+      description: User UUID.
+      schema:
+        type: string
+        format: uuid
+        example: 6ba7b810-9dad-11d1-80b4-00c04fd430c8
+
   schemas:
     UserRequest:
       type: object
@@ -159,6 +438,29 @@ components:
         last_name: Silva
         email: maria.silva@example.com
         password: Str0ngP@ss!
+    UserPatchRequest:
+      type: object
+      description: All properties optional; only sent fields are updated.
+      properties:
+        first_name:
+          type: string
+          description: If present, must be non-empty after trim (same rules as create).
+          example: Ana
+        last_name:
+          type: string
+          example: Costa
+        email:
+          type: string
+          format: email
+          example: ana@example.com
+        password:
+          type: string
+          description: Minimum 8 Unicode characters; stored as bcrypt hash.
+          minLength: 8
+          example: newSecret12
+      example:
+        first_name: Ana
+        email: ana@example.com
     UsersResponse:
       type: object
       required:

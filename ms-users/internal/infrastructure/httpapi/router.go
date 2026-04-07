@@ -6,10 +6,15 @@ import (
 	"ilia-golang-challenge/ms-users/internal/infrastructure/swagger"
 )
 
-// NewRouter registers Swagger (when openAPISpec is non-empty), then user routes.
 func NewRouter(userHandler *UserHandler, openAPISpec []byte) http.Handler {
 	mux := http.NewServeMux()
 	swagger.Register(mux, openAPISpec)
-	mux.HandleFunc("/users", userHandler.PostUser)
+
+	mux.HandleFunc("GET /users", userHandler.GetUsers)
+	mux.HandleFunc("POST /users", userHandler.PostUser)
+	mux.HandleFunc("GET /users/{id}", userHandler.GetUser)
+	mux.HandleFunc("PATCH /users/{id}", userHandler.PatchUser)
+	mux.HandleFunc("DELETE /users/{id}", userHandler.DeleteUser)
+
 	return mux
 }
