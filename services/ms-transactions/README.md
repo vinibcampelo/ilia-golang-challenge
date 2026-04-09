@@ -69,6 +69,28 @@ curl -sS -X POST http://localhost:3001/transactions \
 
 O corpo de `POST /transactions` exige `user_id` **igual** ao `sub` do JWT; caso contrário a API responde **403**.
 
+## Idempotência (`POST /transactions`)
+
+O header opcional **`Idempotency-Key`** evita criar transações duplicadas quando o cliente repete o mesmo `POST` (timeout, retry de rede, etc.).
+
+- **Escopo:** par (`usuário do JWT`, valor do header). Outro usuário pode usar a mesma string de chave sem colidir.
+- **Comportamento:** mesma chave **e** mesmo corpo efetivo (`user_id`, `type`, `amount`) → resposta **201** de novo com o **mesmo** `id` e JSON (não há segunda linha na carteira). Mesma chave com corpo **diferente** → **409 Conflict**.
+- **Opcional:** clientes antigos ou fluxos sem retry podem omitir o header; cada chamada continua criando uma transação nova. Isso segue o padrão de APIs de pagamento públicas que **recomendam** chave para retry mas não obrigam.
+- **Recomendado:** gerar um UUID (ou outro id estável) **por ação do usuário** e reutilizá-lo em todos os retries daquela ação.
+- **Limite:** no máximo **255** code points Unicode; acima disso a API responde **400** (`idempotency key exceeds maximum length`).
+
+Exemplo com chave:
+
+```bash
+curl -sS -X POST http://localhost:3001/transactions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: $(uuidgen)" \
+  -d '{"user_id":"<mesmo UUID do sub>","type":"CREDIT","amount":100}'
+```
+
+Detalhes e textos de erro: [`ms-transactions.yaml`](ms-transactions.yaml) (parâmetro `Idempotency-Key` em `POST /transactions`).
+
 ## OpenAPI
 
 Especificação: [`ms-transactions.yaml`](ms-transactions.yaml). Com `OPENAPI_SPEC` definido, a UI fica em `/swagger/`.

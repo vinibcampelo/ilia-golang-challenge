@@ -27,7 +27,9 @@ func mustMinor(t *testing.T, v int64) domaintransaction.MinorAmount {
 }
 
 func TestCreateTransactionUseCase_Execute_success(t *testing.T) {
-	t.Run("credit_persists_via_repository_and_returns_view", func(t *testing.T) {
+	t.Parallel()
+
+	t.Run("credit_persists_and_returns_view", func(t *testing.T) {
 		t.Parallel()
 		subject := testTransactionSubjectUserID
 		uid := uuid.MustParse(subject)
@@ -35,7 +37,7 @@ func TestCreateTransactionUseCase_Execute_success(t *testing.T) {
 
 		controller := gomock.NewController(t)
 		mockRepository := transactionmocks.NewMockRepository(controller)
-		mockRepository.EXPECT().Create(gomock.Any(), pending).
+		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
 			Return(&domaintransaction.Transaction{
 				ID:     uuid.MustParse("11111111-1111-1111-1111-111111111111"),
 				UserID: uid,
@@ -57,6 +59,41 @@ func TestCreateTransactionUseCase_Execute_success(t *testing.T) {
 			t.Fatalf("unexpected view: %+v", view)
 		}
 	})
+
+	t.Run("with_idempotency_key_passes_fingerprint_to_repository", func(t *testing.T) {
+		t.Parallel()
+		subject := testTransactionSubjectUserID
+		uid := uuid.MustParse(subject)
+		pending := domaintransaction.NewTransaction(uid, domaintransaction.TypeCredit, mustMinor(t, 10))
+		const idemKey = "idem-uuid-1"
+		repoIn := domaintransaction.RepositoryCreateInput{
+			Transaction:        pending,
+			IdempotencyKey:     idemKey,
+			RequestFingerprint: TransactionRequestFingerprint(subject, domaintransaction.TypeCredit, 10),
+		}
+
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		mockRepository.EXPECT().Create(gomock.Any(), repoIn).
+			Return(&domaintransaction.Transaction{
+				ID:     uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+				UserID: uid,
+				Type:   domaintransaction.TypeCredit,
+				Amount: mustMinor(t, 10),
+			}, nil)
+
+		useCase := NewCreateTransactionUseCase(mockRepository)
+		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
+			SubjectUserID:  subject,
+			BodyUserID:     subject,
+			Type:           "CREDIT",
+			Amount:         10,
+			IdempotencyKey: idemKey,
+		})
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+	})
 }
 
 func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
@@ -69,7 +106,7 @@ func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
 		expectedError error
 	}{
 		{
-			name: "invalid body user id",
+			name: "invalid_body_user_id_returns_ErrInvalidUserID",
 			input: CreateTransactionInput{
 				SubjectUserID: subject,
 				BodyUserID:    "not-a-uuid",
@@ -79,7 +116,7 @@ func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
 			expectedError: ErrInvalidUserID,
 		},
 		{
-			name: "forbidden user id mismatch",
+			name: "forbidden_user_id_mismatch_returns_ErrForbiddenUser",
 			input: CreateTransactionInput{
 				SubjectUserID: subject,
 				BodyUserID:    testTransactionOtherUserID,
@@ -89,7 +126,7 @@ func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
 			expectedError: ErrForbiddenUser,
 		},
 		{
-			name: "invalid transaction type",
+			name: "invalid_transaction_type_returns_ErrInvalidTransactionType",
 			input: CreateTransactionInput{
 				SubjectUserID: subject,
 				BodyUserID:    subject,
@@ -99,7 +136,7 @@ func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
 			expectedError: ErrInvalidTransactionType,
 		},
 		{
-			name: "non positive amount",
+			name: "non_positive_amount_returns_ErrInvalidAmount",
 			input: CreateTransactionInput{
 				SubjectUserID: subject,
 				BodyUserID:    subject,
@@ -139,7 +176,7 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 
 		controller := gomock.NewController(t)
 		mockRepository := transactionmocks.NewMockRepository(controller)
-		mockRepository.EXPECT().Create(gomock.Any(), pending).
+		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
 			Return(nil, domaintransaction.ErrInsufficientBalance)
 
 		useCase := NewCreateTransactionUseCase(mockRepository)
@@ -164,7 +201,8 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 
 		controller := gomock.NewController(t)
 		mockRepository := transactionmocks.NewMockRepository(controller)
-		mockRepository.EXPECT().Create(gomock.Any(), pending).Return(nil, repositoryError)
+		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
+			Return(nil, repositoryError)
 
 		useCase := NewCreateTransactionUseCase(mockRepository)
 		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
@@ -178,6 +216,39 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 		}
 		if !errors.Is(err, repositoryError) {
 			t.Fatalf("errors.Is: got %v, want %v", err, repositoryError)
+		}
+	})
+
+	t.Run("idempotency_conflict_returns_ErrIdempotencyConflict", func(t *testing.T) {
+		t.Parallel()
+		subject := testTransactionSubjectUserID
+		uid := uuid.MustParse(subject)
+		pending := domaintransaction.NewTransaction(uid, domaintransaction.TypeCredit, mustMinor(t, 10))
+		const idemKey = "idem-uuid-1"
+		repoIn := domaintransaction.RepositoryCreateInput{
+			Transaction:        pending,
+			IdempotencyKey:     idemKey,
+			RequestFingerprint: TransactionRequestFingerprint(subject, domaintransaction.TypeCredit, 10),
+		}
+
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		mockRepository.EXPECT().Create(gomock.Any(), repoIn).
+			Return(nil, domaintransaction.ErrIdempotencyConflict)
+
+		useCase := NewCreateTransactionUseCase(mockRepository)
+		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
+			SubjectUserID:  subject,
+			BodyUserID:     subject,
+			Type:           "CREDIT",
+			Amount:         10,
+			IdempotencyKey: idemKey,
+		})
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		if !errors.Is(err, ErrIdempotencyConflict) {
+			t.Fatalf("errors.Is: got %v, want %v", err, ErrIdempotencyConflict)
 		}
 	})
 }

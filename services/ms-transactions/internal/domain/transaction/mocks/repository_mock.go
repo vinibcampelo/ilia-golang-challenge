@@ -42,18 +42,18 @@ func (m *MockRepository) EXPECT() *MockRepositoryMockRecorder {
 }
 
 // Create mocks base method.
-func (m *MockRepository) Create(ctx context.Context, tr transaction.Transaction) (*transaction.Transaction, error) {
+func (m *MockRepository) Create(ctx context.Context, in transaction.RepositoryCreateInput) (*transaction.Transaction, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", ctx, tr)
+	ret := m.ctrl.Call(m, "Create", ctx, in)
 	ret0, _ := ret[0].(*transaction.Transaction)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockRepositoryMockRecorder) Create(ctx, tr any) *gomock.Call {
+func (mr *MockRepositoryMockRecorder) Create(ctx, in any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockRepository)(nil).Create), ctx, tr)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockRepository)(nil).Create), ctx, in)
 }
 
 // GetBalance mocks base method.

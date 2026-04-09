@@ -7,7 +7,10 @@ import (
 	"github.com/google/uuid"
 )
 
-var ErrInsufficientBalance = errors.New("insufficient balance")
+var (
+	ErrInsufficientBalance = errors.New("insufficient balance")
+	ErrIdempotencyConflict = errors.New("idempotency key reused with a different request body")
+)
 
 type Transaction struct {
 	ID        uuid.UUID

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/google/uuid"
 
@@ -18,10 +19,15 @@ func NewCreateTransactionUseCase(repo domaintransaction.Repository) *CreateTrans
 }
 
 type CreateTransactionInput struct {
-	SubjectUserID string
-	BodyUserID    string
-	Type          string
-	Amount        int64
+	SubjectUserID  string
+	BodyUserID     string
+	Type           string
+	Amount         int64
+	IdempotencyKey string
+}
+
+func TransactionRequestFingerprint(bodyUserID string, txType domaintransaction.Type, amountMinor int64) string {
+	return fmt.Sprintf("%s|%s|%d", bodyUserID, txType.String(), amountMinor)
 }
 
 func (uc *CreateTransactionUseCase) Execute(ctx context.Context, in CreateTransactionInput) (*TransactionView, error) {
@@ -48,10 +54,19 @@ func (uc *CreateTransactionUseCase) Execute(ctx context.Context, in CreateTransa
 	}
 
 	pending := domaintransaction.NewTransaction(userUUID, txType, minor)
-	created, err := uc.repo.Create(ctx, pending)
+	repoIn := domaintransaction.RepositoryCreateInput{Transaction: pending}
+	if in.IdempotencyKey != "" {
+		repoIn.IdempotencyKey = in.IdempotencyKey
+		repoIn.RequestFingerprint = TransactionRequestFingerprint(in.BodyUserID, txType, in.Amount)
+	}
+
+	created, err := uc.repo.Create(ctx, repoIn)
 	if err != nil {
 		if errors.Is(err, domaintransaction.ErrInsufficientBalance) {
 			return nil, ErrInsufficientBalance
+		}
+		if errors.Is(err, domaintransaction.ErrIdempotencyConflict) {
+			return nil, ErrIdempotencyConflict
 		}
 		return nil, err
 	}
