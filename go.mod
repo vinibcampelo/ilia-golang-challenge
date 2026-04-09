@@ -5,6 +5,7 @@ go 1.26
 toolchain go1.26.1
 
 require (
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/golang-migrate/migrate/v4 v4.18.2
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.7.4
