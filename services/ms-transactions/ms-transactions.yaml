@@ -2,66 +2,153 @@ openapi: 3.0.0
 info:
   title: Microservice Wallet
   version: 1.0.0
-  
+
 servers:
   - url: http://localhost:3001
     description: Local
-  
-  
+
 tags:
   - name: Transactions
 
 paths:
-  # Transactions
   /transactions:
     post:
+      summary: Create transaction
+      description: |
+        Creates a CREDIT or DEBIT for the authenticated user. `user_id` in the body must equal the JWT subject (`sub`).
+        DEBIT is rejected with 422 when it would make the wallet balance negative.
+        All monetary fields are **minor currency units** (integer, e.g. centavos for BRL); never floating-point.
+      tags:
+        - Transactions
+      security:
+        - bearerAuth: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/Transactions'
-      tags:
-        - Transactions
       responses:
-        '200':
+        '201':
+          description: Transaction created. Optional `Location` header `/transactions/{id}`.
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /transactions/6ba7b810-9dad-11d1-80b4-00c04fd430c8
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionsModel'
-          description: Response
+        '400':
+          description: Malformed JSON or validation error (invalid UUID, invalid type, amount not positive).
+          content:
+            text/plain:
+              schema:
+                type: string
+              examples:
+                invalidJson:
+                  value: invalid JSON body
+                invalidUserId:
+                  value: invalid user id
+                invalidType:
+                  value: invalid transaction type
+                invalidAmount:
+                  value: amount must be positive
         '401':
           $ref: '#/components/responses/UnauthorizedError'
-      security: 
-        - bearerAuth: []
+        '403':
+          description: Body `user_id` does not match JWT subject.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: forbidden
+        '405':
+          description: Method not allowed.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Method Not Allowed
+        '422':
+          description: DEBIT would exceed available balance.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: insufficient balance
+        '500':
+          description: Unexpected failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Internal Server Error
     get:
+      summary: List transactions
+      description: |
+        Returns transactions for the JWT subject only, ordered by `created_at` ascending.
+        Optional query `type` filters by CREDIT or DEBIT (must match enum case).
       tags:
         - Transactions
-      security: 
+      security:
         - bearerAuth: []
       parameters:
         - in: query
           name: type
+          required: false
+          description: Filter by CREDIT or DEBIT (case-sensitive).
           schema:
             type: string
+            enum:
+              - CREDIT
+              - DEBIT
       responses:
-        200:
-          description: OK
+        '200':
+          description: OK (JSON array; may be empty).
           content:
             application/json:
               schema:
                 type: array
                 items:
                   $ref: '#/components/schemas/TransactionsModel'
+        '400':
+          description: Invalid `type` query parameter.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: invalid transaction type filter
         '401':
           $ref: '#/components/responses/UnauthorizedError'
-  # Transactions
+        '405':
+          description: Method not allowed.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Method Not Allowed
+        '500':
+          description: Unexpected failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Internal Server Error
   /balance:
     get:
-      description: Esse endpoint deve retornar um consolidado das transações de CREDITO e DEBITO, fazendo o calculo do valor, de prefência que seja uma query fazendo o calculo
+      summary: Wallet balance
+      description: |
+        Consolidated balance from all CREDIT and DEBIT rows for the JWT subject, computed with SQL
+        `SUM` and `CASE` (credits add, debits subtract). Returned `amount` is in **minor currency units**
+        (same scale as transaction amounts).
       tags:
         - Transactions
+      security:
+        - bearerAuth: []
       responses:
-        200:
+        '200':
           description: OK
           content:
             application/json:
@@ -69,55 +156,79 @@ paths:
                 $ref: '#/components/schemas/BalanceResponse'
         '401':
           $ref: '#/components/responses/UnauthorizedError'
-      security: 
-        - bearerAuth: []
+        '405':
+          description: Method not allowed.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Method Not Allowed
+        '500':
+          description: Unexpected failure.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: Internal Server Error
+
 components:
   schemas:
     Transactions:
       type: object
       required:
-      - user_id
-      - type
-      - amount
+        - user_id
+        - type
+        - amount
       properties:
         user_id:
           type: string
+          format: uuid
         amount:
           type: integer
+          minimum: 1
+          description: Positive amount in minor currency units (e.g. 1050 = R$ 10,50 in centavos).
         type:
           type: string
           enum:
-          - CREDIT
-          - DEBIT
+            - CREDIT
+            - DEBIT
     TransactionsModel:
       type: object
       required:
-      - user_id
-      - type
-      - amount
+        - id
+        - user_id
+        - type
+        - amount
       properties:
-        id: 
+        id:
           type: string
+          format: uuid
         user_id:
           type: string
+          format: uuid
         amount:
           type: integer
+          description: Amount in minor currency units.
         type:
           type: string
           enum:
-          - CREDIT
-          - DEBIT
+            - CREDIT
+            - DEBIT
     BalanceResponse:
       type: object
+      required:
+        - amount
       properties:
         amount:
           type: integer
-        
+          description: Net balance in minor currency units (credits minus debits).
+
   securitySchemes:
-    bearerAuth:            # arbitrary name for the security scheme
+    bearerAuth:
       type: http
       scheme: bearer
       bearerFormat: JWT
+
   responses:
     UnauthorizedError:
-      description: Access token is missing or invalid    
+      description: Access token is missing or invalid
