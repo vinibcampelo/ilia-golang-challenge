@@ -7,6 +7,7 @@ import "context"
 type Repository interface {
 	Save(ctx context.Context, entity *User) error
 	FindByID(ctx context.Context, id string) (*User, error)
+	FindByEmail(ctx context.Context, email string) (*User, error)
 	List(ctx context.Context) ([]User, error)
 	Update(ctx context.Context, entity *User) error
 	DeleteByID(ctx context.Context, id string) error

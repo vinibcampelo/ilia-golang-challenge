@@ -13,3 +13,6 @@ var ErrNotFound = errors.New("user not found")
 
 // ErrEmailAlreadyExists is returned when save or update would violate unique email.
 var ErrEmailAlreadyExists = errors.New("email already registered")
+
+// ErrInvalidCredentials is returned when login email/password do not match an active user.
+var ErrInvalidCredentials = errors.New("invalid credentials")

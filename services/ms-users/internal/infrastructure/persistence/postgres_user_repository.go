@@ -64,6 +64,25 @@ func (r *PostgresUserRepository) FindByID(ctx context.Context, userID string) (*
 	return &foundUser, nil
 }
 
+func (r *PostgresUserRepository) FindByEmail(ctx context.Context, email string) (*domainuser.User, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("find user by email: %w", err)
+	}
+	row := r.database.QueryRowContext(ctx, `
+		SELECT id, first_name, last_name, email, password
+		FROM users
+		WHERE email = $1 AND deleted_at IS NULL
+	`, email)
+	var foundUser domainuser.User
+	if err := row.Scan(&foundUser.ID, &foundUser.FirstName, &foundUser.LastName, &foundUser.Email, &foundUser.Password); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("find user by email: %w", usecase.ErrNotFound)
+		}
+		return nil, fmt.Errorf("find user by email: %w", err)
+	}
+	return &foundUser, nil
+}
+
 func (r *PostgresUserRepository) List(ctx context.Context) ([]domainuser.User, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("list users: %w", err)

@@ -15,6 +15,7 @@ import (
 	"ilia-golang-challenge/services/ms-users/internal/config"
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/db"
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/httpapi"
+	"ilia-golang-challenge/services/ms-users/internal/infrastructure/jwtissuer"
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/persistence"
 )
 
@@ -88,13 +89,19 @@ func loadSwaggerSpecBytesOrNil(openAPISpecPath string) []byte {
 }
 
 func buildRouter(dbConn *sql.DB, configuration config.Config, openAPISpecBytes []byte) http.Handler {
-	repo := persistence.NewPostgresUserRepository(dbConn)
+	jwtSecret := []byte(configuration.JWTSecret)
+	repository := persistence.NewPostgresUserRepository(dbConn)
+	tokenIssuer := &jwtissuer.HS256AccessTokenIssuer{
+		Secret: jwtSecret,
+		TTL:    configuration.JWTExpiration,
+	}
 	userHandler := httpapi.NewUserHandler(
-		usecase.NewCreateUserUseCase(repo, configuration.BcryptCost),
-		usecase.NewListUsersUseCase(repo),
-		usecase.NewGetUserUseCase(repo),
-		usecase.NewUpdateUserUseCase(repo, configuration.BcryptCost),
-		usecase.NewDeleteUserUseCase(repo),
+		usecase.NewCreateUserUseCase(repository, configuration.BcryptCost),
+		usecase.NewListUsersUseCase(repository),
+		usecase.NewGetUserUseCase(repository),
+		usecase.NewUpdateUserUseCase(repository, configuration.BcryptCost),
+		usecase.NewDeleteUserUseCase(repository),
 	)
-	return httpapi.NewRouter(userHandler, openAPISpecBytes)
+	authHandler := httpapi.NewAuthHandler(usecase.NewAuthenticateUserUseCase(repository, tokenIssuer))
+	return httpapi.NewRouter(userHandler, authHandler, jwtSecret, openAPISpecBytes)
 }

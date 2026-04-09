@@ -16,10 +16,12 @@ type Config struct {
 	DatabaseURL     string
 	DBPingTimeout   time.Duration
 	BcryptCost      int
+	JWTSecret       string
+	JWTExpiration   time.Duration
 }
 
 // Load reads configuration from the process environment (populate from a .env file via godotenv in main).
-// Required: PORT, DATABASE_URL. Optional keys are documented in .env.example.
+// Required: PORT, DATABASE_URL, JWT_SECRET. Optional keys are documented in .env.example.
 func Load() (Config, error) {
 	httpPort, err := requiredEnvironmentVariable("PORT")
 	if err != nil {
@@ -33,12 +35,20 @@ func Load() (Config, error) {
 
 	pingTimeout := durationFromEnvironmentOrDefault("DB_PING_TIMEOUT", 10*time.Second)
 
+	jwtSecret, err := requiredEnvironmentVariable("JWT_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	jwtExpiration := durationFromEnvironmentOrDefault("JWT_EXPIRATION", 24*time.Hour)
+
 	return Config{
 		HTTPAddr:        fmt.Sprintf(":%s", httpPort),
 		OpenAPISpecPath: openAPISpecPath,
 		DatabaseURL:     databaseURL,
 		DBPingTimeout:   pingTimeout,
 		BcryptCost:      bcryptCostFromEnvironment(),
+		JWTSecret:       jwtSecret,
+		JWTExpiration:   jwtExpiration,
 	}, nil
 }
 
