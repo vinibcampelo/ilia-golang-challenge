@@ -32,7 +32,8 @@ const balanceQuery = `
 SELECT COALESCE(SUM(CASE type WHEN 'CREDIT' THEN amount WHEN 'DEBIT' THEN -amount END), 0)
 FROM transactions WHERE user_id = $1::uuid`
 
-func (r *PostgresTransactionRepository) Create(ctx context.Context, tr domaintransaction.Transaction) (*domaintransaction.Transaction, error) {
+func (r *PostgresTransactionRepository) Create(ctx context.Context, in domaintransaction.RepositoryCreateInput) (*domaintransaction.Transaction, error) {
+	tr := in.Transaction
 	uid := tr.UserID
 
 	tx, err := r.db.BeginTx(ctx, nil)
@@ -44,6 +45,33 @@ func (r *PostgresTransactionRepository) Create(ctx context.Context, tr domaintra
 	k1, k2 := advisoryLockKeys(uid)
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, k1, k2); err != nil {
 		return nil, fmt.Errorf("advisory lock: %w", err)
+	}
+
+	if in.IdempotencyKey != "" {
+		var storedFingerprint string
+		var existingTxID uuid.UUID
+		err := tx.QueryRowContext(ctx, `
+			SELECT request_fingerprint, transaction_id
+			FROM idempotency_keys
+			WHERE user_id = $1::uuid AND idempotency_key = $2`,
+			uid.String(), in.IdempotencyKey,
+		).Scan(&storedFingerprint, &existingTxID)
+		if err == nil {
+			if storedFingerprint != in.RequestFingerprint {
+				return nil, domaintransaction.ErrIdempotencyConflict
+			}
+			out, err := scanTransactionByID(ctx, tx, existingTxID)
+			if err != nil {
+				return nil, err
+			}
+			if err := tx.Commit(); err != nil {
+				return nil, fmt.Errorf("commit: %w", err)
+			}
+			return out, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("idempotency lookup: %w", err)
+		}
 	}
 
 	var balance int64
@@ -65,6 +93,16 @@ func (r *PostgresTransactionRepository) Create(ctx context.Context, tr domaintra
 		return nil, fmt.Errorf("insert transaction: %w", err)
 	}
 
+	if in.IdempotencyKey != "" {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO idempotency_keys (user_id, idempotency_key, request_fingerprint, transaction_id)
+			VALUES ($1::uuid, $2, $3, $4::uuid)`,
+			uid.String(), in.IdempotencyKey, in.RequestFingerprint, id.String(),
+		); err != nil {
+			return nil, fmt.Errorf("insert idempotency_keys: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
@@ -72,6 +110,25 @@ func (r *PostgresTransactionRepository) Create(ctx context.Context, tr domaintra
 	out := tr
 	out.ID = id
 	out.CreatedAt = createdAt
+	return &out, nil
+}
+
+func scanTransactionByID(ctx context.Context, tx *sql.Tx, id uuid.UUID) (*domaintransaction.Transaction, error) {
+	var out domaintransaction.Transaction
+	var typ string
+	var amountRaw int64
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id, user_id, type, amount, created_at
+		FROM transactions WHERE id = $1::uuid`,
+		id.String(),
+	).Scan(&out.ID, &out.UserID, &typ, &amountRaw, &out.CreatedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("transaction %s: %w", id.String(), err)
+		}
+		return nil, fmt.Errorf("load transaction: %w", err)
+	}
+	out.Type = domaintransaction.Type(typ)
+	out.Amount = domaintransaction.RehydrateMinorAmount(amountRaw)
 	return &out, nil
 }
 

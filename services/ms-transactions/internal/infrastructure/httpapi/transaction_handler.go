@@ -5,9 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
+	"unicode/utf8"
 
 	"ilia-golang-challenge/services/ms-transactions/internal/application/transaction/usecase"
 )
+
+const maxIdempotencyKeyRunes = 255
 
 type TransactionHandler struct {
 	createUC  *usecase.CreateTransactionUseCase
@@ -40,11 +44,18 @@ func (h *TransactionHandler) PostTransaction(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey != "" && utf8.RuneCountInString(idempotencyKey) > maxIdempotencyKeyRunes {
+		http.Error(w, "idempotency key exceeds maximum length", http.StatusBadRequest)
+		return
+	}
+
 	view, err := h.createUC.Execute(r.Context(), usecase.CreateTransactionInput{
-		SubjectUserID: subject,
-		BodyUserID:    body.UserID,
-		Type:          body.Type,
-		Amount:        body.Amount,
+		SubjectUserID:  subject,
+		BodyUserID:     body.UserID,
+		Type:           body.Type,
+		Amount:         body.Amount,
+		IdempotencyKey: idempotencyKey,
 	})
 	if err != nil {
 		switch {
@@ -58,6 +69,8 @@ func (h *TransactionHandler) PostTransaction(w http.ResponseWriter, r *http.Requ
 			http.Error(w, usecase.ErrInvalidAmount.Error(), http.StatusBadRequest)
 		case errors.Is(err, usecase.ErrInsufficientBalance):
 			http.Error(w, usecase.ErrInsufficientBalance.Error(), http.StatusUnprocessableEntity)
+		case errors.Is(err, usecase.ErrIdempotencyConflict):
+			http.Error(w, usecase.ErrIdempotencyConflict.Error(), http.StatusConflict)
 		default:
 			respondInternalServerError(w)
 		}

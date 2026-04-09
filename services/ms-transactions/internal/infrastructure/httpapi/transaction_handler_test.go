@@ -69,7 +69,7 @@ func TestTransactionHandler_PostTransaction_success(tb *testing.T) {
 
 		controller := gomock.NewController(t)
 		mockRepository := transactionmocks.NewMockRepository(controller)
-		mockRepository.EXPECT().Create(gomock.Any(), pending).
+		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
 			Return(&domaintransaction.Transaction{
 				ID:     uuid.MustParse("22222222-2222-2222-2222-222222222222"),
 				UserID: uid,
@@ -102,6 +102,56 @@ func TestTransactionHandler_PostTransaction_success(tb *testing.T) {
 		}
 		if parsed.Amount != 25 || parsed.Type != "CREDIT" || parsed.UserID != subject {
 			t.Fatalf("unexpected body: %+v", parsed)
+		}
+	})
+
+	tb.Run("idempotency_replay_returns_same_201_location_and_body", func(t *testing.T) {
+		t.Parallel()
+		subject := transactionHandlerTestUserID
+		uid := uuid.MustParse(subject)
+		pending := domaintransaction.NewTransaction(uid, domaintransaction.TypeCredit, mustMinorAmount(t, 25))
+		repoIn := domaintransaction.RepositoryCreateInput{
+			Transaction:        pending,
+			IdempotencyKey:     "replay-key",
+			RequestFingerprint: usecase.TransactionRequestFingerprint(subject, domaintransaction.TypeCredit, 25),
+		}
+		created := &domaintransaction.Transaction{
+			ID:     uuid.MustParse("22222222-2222-2222-2222-222222222222"),
+			UserID: uid,
+			Type:   domaintransaction.TypeCredit,
+			Amount: mustMinorAmount(t, 25),
+		}
+
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		gomock.InOrder(
+			mockRepository.EXPECT().Create(gomock.Any(), repoIn).Return(created, nil),
+			mockRepository.EXPECT().Create(gomock.Any(), repoIn).Return(created, nil),
+		)
+
+		srv := newTransactionTestRouter(t, mockRepository)
+		body := `{"user_id":"` + subject + `","type":"CREDIT","amount":25}`
+		post := func() *httptest.ResponseRecorder {
+			t.Helper()
+			request := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+transactionTestJWT(t, subject))
+			request.Header.Set("Idempotency-Key", "replay-key")
+			recorder := httptest.NewRecorder()
+			srv.ServeHTTP(recorder, request)
+			return recorder
+		}
+
+		first := post()
+		second := post()
+		if first.Code != http.StatusCreated || second.Code != http.StatusCreated {
+			t.Fatalf("status: first %d second %d", first.Code, second.Code)
+		}
+		if first.Header().Get("Location") != second.Header().Get("Location") {
+			t.Fatalf("Location: first %q second %q", first.Header().Get("Location"), second.Header().Get("Location"))
+		}
+		if !bytes.Equal(first.Body.Bytes(), second.Body.Bytes()) {
+			t.Fatalf("body mismatch: first %s second %s", first.Body.String(), second.Body.String())
 		}
 	})
 }
@@ -146,7 +196,7 @@ func TestTransactionHandler_PostTransaction_errors(tb *testing.T) {
 		debitPending := domaintransaction.NewTransaction(uid, domaintransaction.TypeDebit, mustMinorAmount(t, 999))
 		controller := gomock.NewController(t)
 		mockRepository := transactionmocks.NewMockRepository(controller)
-		mockRepository.EXPECT().Create(gomock.Any(), debitPending).
+		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: debitPending}).
 			Return(nil, domaintransaction.ErrInsufficientBalance)
 
 		srv := newTransactionTestRouter(t, mockRepository)
@@ -173,6 +223,55 @@ func TestTransactionHandler_PostTransaction_errors(tb *testing.T) {
 		srv.ServeHTTP(responseRecorder, request)
 		if responseRecorder.Code != http.StatusBadRequest {
 			t.Fatalf("status: got %d want %d", responseRecorder.Code, http.StatusBadRequest)
+		}
+	})
+
+	tb.Run("idempotency_key_exceeds_max_length_returns_400", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		srv := newTransactionTestRouter(t, mockRepository)
+		longKey := strings.Repeat("a", maxIdempotencyKeyRunes+1)
+		body := `{"user_id":"` + subject + `","type":"CREDIT","amount":1}`
+		request := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+transactionTestJWT(t, subject))
+		request.Header.Set("Idempotency-Key", longKey)
+		responseRecorder := httptest.NewRecorder()
+		srv.ServeHTTP(responseRecorder, request)
+		if responseRecorder.Code != http.StatusBadRequest {
+			t.Fatalf("status: got %d want %d, body: %s", responseRecorder.Code, http.StatusBadRequest, responseRecorder.Body.String())
+		}
+	})
+
+	tb.Run("idempotency_conflict_returns_409", func(t *testing.T) {
+		t.Parallel()
+		pending := domaintransaction.NewTransaction(uid, domaintransaction.TypeCredit, mustMinorAmount(t, 1))
+		repoIn := domaintransaction.RepositoryCreateInput{
+			Transaction:        pending,
+			IdempotencyKey:     "conflict-key",
+			RequestFingerprint: usecase.TransactionRequestFingerprint(subject, domaintransaction.TypeCredit, 1),
+		}
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		mockRepository.EXPECT().Create(gomock.Any(), repoIn).
+			Return(nil, domaintransaction.ErrIdempotencyConflict)
+
+		srv := newTransactionTestRouter(t, mockRepository)
+		body := `{"user_id":"` + subject + `","type":"CREDIT","amount":1}`
+		request := httptest.NewRequest(http.MethodPost, "/transactions", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+transactionTestJWT(t, subject))
+		request.Header.Set("Idempotency-Key", "conflict-key")
+		responseRecorder := httptest.NewRecorder()
+		srv.ServeHTTP(responseRecorder, request)
+		if responseRecorder.Code != http.StatusConflict {
+			t.Fatalf("status: got %d want %d, body: %s", responseRecorder.Code, http.StatusConflict, responseRecorder.Body.String())
+		}
+		responseBody := strings.TrimSpace(responseRecorder.Body.String())
+		wantBody := usecase.ErrIdempotencyConflict.Error()
+		if responseBody != wantBody {
+			t.Fatalf("body: got %q want %q", responseBody, wantBody)
 		}
 	})
 }

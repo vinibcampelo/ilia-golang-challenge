@@ -18,10 +18,32 @@ paths:
         Creates a CREDIT or DEBIT for the authenticated user. `user_id` in the body must equal the JWT subject (`sub`).
         DEBIT is rejected with 422 when it would make the wallet balance negative.
         All monetary fields are **minor currency units** (integer, e.g. centavos for BRL); never floating-point.
+        Optional header `Idempotency-Key` enables safe retries (see parameter description).
       tags:
         - Transactions
       security:
         - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: |
+            **Optional.** When sent (non-empty after trim), the server stores a mapping scoped to the authenticated user
+            (`JWT sub`) and this key. Retrying the **same** request (same key and same `user_id`, `type`, `amount`) returns
+            **201** again with the **same** transaction id and body (no second row in the ledger), matching common payment-API behavior.
+
+            **Why optional:** aligns with public payment APIs (e.g. Stripe) that recommend idempotency keys for retries but do not
+            break older clients; simple integrations may omit it; omitting the header keeps the previous behavior (each POST creates a new transaction).
+
+            **Recommended:** clients that retry `POST` after timeouts or network errors should send a **stable** key per logical
+            operation (e.g. a UUID generated once per user action).
+
+            Max length: **255 Unicode code points**. Longer values yield **400**.
+
+            Reusing the same key with a **different** body (different `user_id` / `type` / `amount`) for the same user yields **409 Conflict**.
+          schema:
+            type: string
+            maxLength: 255
       requestBody:
         required: true
         content:
@@ -30,7 +52,9 @@ paths:
               $ref: '#/components/schemas/Transactions'
       responses:
         '201':
-          description: Transaction created. Optional `Location` header `/transactions/{id}`.
+          description: |
+            Transaction created, or idempotent replay of a prior successful create with the same `Idempotency-Key` and body.
+            Optional `Location` header `/transactions/{id}`.
           headers:
             Location:
               schema:
@@ -55,6 +79,8 @@ paths:
                   value: invalid transaction type
                 invalidAmount:
                   value: amount must be positive
+                idempotencyKeyTooLong:
+                  value: idempotency key exceeds maximum length
         '401':
           $ref: '#/components/responses/UnauthorizedError'
         '403':
@@ -63,7 +89,7 @@ paths:
             text/plain:
               schema:
                 type: string
-              example: forbidden
+              example: user_id must match JWT subject
         '405':
           description: Method not allowed.
           content:
@@ -78,6 +104,13 @@ paths:
               schema:
                 type: string
               example: insufficient balance
+        '409':
+          description: Same `Idempotency-Key` for this user with a different request body.
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: idempotency key reused with a different request body
         '500':
           description: Unexpected failure.
           content:
