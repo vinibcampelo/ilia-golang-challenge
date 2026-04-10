@@ -6,8 +6,13 @@ import (
 	"ilia-golang-challenge/services/ms-transactions/internal/infrastructure/swagger"
 )
 
-// NewRouter registers Swagger (when openAPISpec is non-empty) and JWT-protected transaction routes.
-func NewRouter(handler *TransactionHandler, jwtSecret []byte, openAPISpec []byte) http.Handler {
+func NewRouter(
+	handler *TransactionHandler,
+	internalWalletHandler *InternalWalletHandler,
+	jwtSecret []byte,
+	internalJWTSecret []byte,
+	openAPISpec []byte,
+) http.Handler {
 	mux := http.NewServeMux()
 	swagger.Register(mux, openAPISpec)
 
@@ -18,6 +23,14 @@ func NewRouter(handler *TransactionHandler, jwtSecret []byte, openAPISpec []byte
 	mux.Handle("POST /transactions", withJWT(http.HandlerFunc(handler.PostTransaction)))
 	mux.Handle("GET /transactions", withJWT(http.HandlerFunc(handler.GetTransactions)))
 	mux.Handle("GET /balance", withJWT(http.HandlerFunc(handler.GetBalance)))
+
+	internalBalance := InternalJWTBearerMiddleware(
+		internalJWTSecret,
+		InternalAudienceTransactions,
+		InternalCallerUsers,
+		http.HandlerFunc(internalWalletHandler.GetBalanceInternal),
+	)
+	mux.Handle("GET /internal/wallet/{userId}/balance", internalBalance)
 
 	return mux
 }

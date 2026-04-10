@@ -8,7 +8,6 @@ import (
 //go:embed ui.html
 var uiHTML []byte
 
-// Register mounts GET /openapi.yaml and GET /swagger/ (GET /swagger redirects) when spec is non-empty.
 func Register(mux *http.ServeMux, spec []byte) {
 	if len(spec) == 0 {
 		return

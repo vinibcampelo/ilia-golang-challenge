@@ -6,8 +6,14 @@ import (
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/swagger"
 )
 
-// NewRouter registers Swagger (when openAPISpec is non-empty), public signup/login, and JWT-protected user routes.
-func NewRouter(userHandler *UserHandler, authHandler *AuthHandler, jwtSecret []byte, openAPISpec []byte) http.Handler {
+func NewRouter(
+	userHandler *UserHandler,
+	authHandler *AuthHandler,
+	internalUserHandler *InternalUserHandler,
+	jwtSecret []byte,
+	internalJWTSecret []byte,
+	openAPISpec []byte,
+) http.Handler {
 	mux := http.NewServeMux()
 	swagger.Register(mux, openAPISpec)
 
@@ -23,6 +29,14 @@ func NewRouter(userHandler *UserHandler, authHandler *AuthHandler, jwtSecret []b
 	mux.Handle("GET /users/{id}", withJWT(selfOnly(http.HandlerFunc(userHandler.GetUser))))
 	mux.Handle("PATCH /users/{id}", withJWT(selfOnly(http.HandlerFunc(userHandler.PatchUser))))
 	mux.Handle("DELETE /users/{id}", withJWT(selfOnly(http.HandlerFunc(userHandler.DeleteUser))))
+
+	internalUsers := InternalJWTBearerMiddleware(
+		internalJWTSecret,
+		InternalAudienceUsers,
+		InternalCallerTransactions,
+		http.HandlerFunc(internalUserHandler.GetUserInternal),
+	)
+	mux.Handle("GET /internal/users/{id}", internalUsers)
 
 	return mux
 }

@@ -49,14 +49,17 @@ setup-prod: ## Create .env.prod from .env.example if missing
 up: up-dev ## Alias for up-dev
 
 up-dev: setup ## Start stack; Compose vars from .env
+	@docker network inspect ilia-challenge-internal >/dev/null 2>&1 || docker network create ilia-challenge-internal
 	$(COMPOSE) --project-directory "$(SERVICE_DIR)" --env-file "$(SERVICE_DIR)/.env" -f "$(SERVICE_DIR)/$(COMPOSE_FILE)" up -d --build
 
 up-example: ## Start stack; Compose vars from .env.example only (no setup)
 	@test -f "$(SERVICE_DIR)/.env.example" || { echo "missing .env.example"; exit 1; }
+	@docker network inspect ilia-challenge-internal >/dev/null 2>&1 || docker network create ilia-challenge-internal
 	$(COMPOSE) --project-directory "$(SERVICE_DIR)" --env-file "$(SERVICE_DIR)/.env.example" -f "$(SERVICE_DIR)/$(COMPOSE_FILE)" up -d --build
 
 up-prod: setup-prod ## Start stack; Compose vars from .env.prod
 	@test -f "$(SERVICE_DIR)/.env.prod" || { echo "missing .env.prod"; exit 1; }
+	@docker network inspect ilia-challenge-internal >/dev/null 2>&1 || docker network create ilia-challenge-internal
 	$(COMPOSE) --project-directory "$(SERVICE_DIR)" --env-file "$(SERVICE_DIR)/.env.prod" -f "$(SERVICE_DIR)/$(COMPOSE_FILE)" up -d --build
 
 down: ## Stop containers (keep named volumes / DB data)

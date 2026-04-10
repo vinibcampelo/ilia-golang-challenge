@@ -10,7 +10,14 @@ import (
 
 	domaintransaction "ilia-golang-challenge/services/ms-transactions/internal/domain/transaction"
 	transactionmocks "ilia-golang-challenge/services/ms-transactions/internal/domain/transaction/mocks"
+	usecasemocks "ilia-golang-challenge/services/ms-transactions/internal/application/transaction/usecase/mocks"
 )
+
+type noopUserActiveGate struct{}
+
+func (noopUserActiveGate) EnsureActive(context.Context, string) error {
+	return nil
+}
 
 const (
 	testTransactionSubjectUserID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
@@ -45,7 +52,7 @@ func TestCreateTransactionUseCase_Execute_success(t *testing.T) {
 				Amount: mustMinor(t, 50),
 			}, nil)
 
-		useCase := NewCreateTransactionUseCase(mockRepository)
+		useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 		view, err := useCase.Execute(context.Background(), CreateTransactionInput{
 			SubjectUserID: subject,
 			BodyUserID:    subject,
@@ -82,7 +89,7 @@ func TestCreateTransactionUseCase_Execute_success(t *testing.T) {
 				Amount: mustMinor(t, 10),
 			}, nil)
 
-		useCase := NewCreateTransactionUseCase(mockRepository)
+		useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
 			SubjectUserID:  subject,
 			BodyUserID:     subject,
@@ -152,7 +159,7 @@ func TestCreateTransactionUseCase_Execute_validation_errors(t *testing.T) {
 			t.Parallel()
 			controller := gomock.NewController(t)
 			mockRepository := transactionmocks.NewMockRepository(controller)
-			useCase := NewCreateTransactionUseCase(mockRepository)
+			useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 
 			_, err := useCase.Execute(context.Background(), testCase.input)
 			if err == nil {
@@ -179,7 +186,7 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
 			Return(nil, domaintransaction.ErrInsufficientBalance)
 
-		useCase := NewCreateTransactionUseCase(mockRepository)
+		useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
 			SubjectUserID: subject,
 			BodyUserID:    subject,
@@ -204,7 +211,7 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 		mockRepository.EXPECT().Create(gomock.Any(), domaintransaction.RepositoryCreateInput{Transaction: pending}).
 			Return(nil, repositoryError)
 
-		useCase := NewCreateTransactionUseCase(mockRepository)
+		useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
 			SubjectUserID: subject,
 			BodyUserID:    subject,
@@ -236,7 +243,7 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 		mockRepository.EXPECT().Create(gomock.Any(), repoIn).
 			Return(nil, domaintransaction.ErrIdempotencyConflict)
 
-		useCase := NewCreateTransactionUseCase(mockRepository)
+		useCase := NewCreateTransactionUseCase(mockRepository, noopUserActiveGate{})
 		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
 			SubjectUserID:  subject,
 			BodyUserID:     subject,
@@ -249,6 +256,48 @@ func TestCreateTransactionUseCase_Execute_errors(t *testing.T) {
 		}
 		if !errors.Is(err, ErrIdempotencyConflict) {
 			t.Fatalf("errors.Is: got %v, want %v", err, ErrIdempotencyConflict)
+		}
+	})
+
+	t.Run("gate_returns_ErrUserNotActive", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		mockGate := usecasemocks.NewMockUserActiveGate(controller)
+		mockGate.EXPECT().EnsureActive(gomock.Any(), subject).Return(ErrUserNotActive)
+		useCase := NewCreateTransactionUseCase(mockRepository, mockGate)
+		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
+			SubjectUserID: subject,
+			BodyUserID:    subject,
+			Type:          "CREDIT",
+			Amount:        1,
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !errors.Is(err, ErrUserNotActive) {
+			t.Fatalf("errors.Is: got %v want %v", err, ErrUserNotActive)
+		}
+	})
+
+	t.Run("gate_returns_ErrUsersServiceUnavailable", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := transactionmocks.NewMockRepository(controller)
+		mockGate := usecasemocks.NewMockUserActiveGate(controller)
+		mockGate.EXPECT().EnsureActive(gomock.Any(), subject).Return(ErrUsersServiceUnavailable)
+		useCase := NewCreateTransactionUseCase(mockRepository, mockGate)
+		_, err := useCase.Execute(context.Background(), CreateTransactionInput{
+			SubjectUserID: subject,
+			BodyUserID:    subject,
+			Type:          "CREDIT",
+			Amount:        1,
+		})
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !errors.Is(err, ErrUsersServiceUnavailable) {
+			t.Fatalf("errors.Is: got %v want %v", err, ErrUsersServiceUnavailable)
 		}
 	})
 }

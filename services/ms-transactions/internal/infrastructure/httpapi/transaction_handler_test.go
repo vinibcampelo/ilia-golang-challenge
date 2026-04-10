@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -19,19 +20,34 @@ import (
 )
 
 const (
-	transactionHandlerTestUserID    = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
-	transactionHandlerTestOtherID   = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
-	transactionHandlerTestJWTSecret = "transaction-handler-test-jwt-secret-min-length!!"
+	transactionHandlerTestUserID           = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+	transactionHandlerTestOtherID          = "7c9e6679-7425-40de-944b-e07fc1f90ae7"
+	transactionHandlerTestJWTSecret        = "transaction-handler-test-jwt-secret-min-length!!"
+	transactionHandlerTestInternalJWTSecret = "transaction-handler-test-internal-jwt-secret-min-len!!"
 )
+
+type noopUserActiveGate struct{}
+
+func (noopUserActiveGate) EnsureActive(context.Context, string) error {
+	return nil
+}
 
 func newTransactionTestRouter(tb testing.TB, repository domaintransaction.Repository) http.Handler {
 	tb.Helper()
+	balanceUC := usecase.NewGetBalanceUseCase(repository)
+	internalWallet := NewInternalWalletHandler(balanceUC)
 	handler := NewTransactionHandler(
-		usecase.NewCreateTransactionUseCase(repository),
+		usecase.NewCreateTransactionUseCase(repository, noopUserActiveGate{}),
 		usecase.NewListTransactionsUseCase(repository),
-		usecase.NewGetBalanceUseCase(repository),
+		balanceUC,
 	)
-	return NewRouter(handler, []byte(transactionHandlerTestJWTSecret), nil)
+	return NewRouter(
+		handler,
+		internalWallet,
+		[]byte(transactionHandlerTestJWTSecret),
+		[]byte(transactionHandlerTestInternalJWTSecret),
+		nil,
+	)
 }
 
 func transactionTestJWT(tb testing.TB, subject string) string {

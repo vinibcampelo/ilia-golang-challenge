@@ -17,7 +17,6 @@ type CreateUserInput struct {
 	Password  string
 }
 
-// CreateUserOutput matches UserView for create responses.
 type CreateUserOutput = UserView
 
 type CreateUserUseCase struct {

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +21,16 @@ import (
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/jwtissuer"
 )
 
-const routerTestJWTSecret = "router-test-jwt-secret-key-min-length-32!!"
+const (
+	routerTestJWTSecret          = "router-test-jwt-secret-key-min-length-32!!"
+	routerTestInternalJWTSecret = "router-test-internal-jwt-secret-min-length-32!!"
+)
+
+type testAllowWalletGate struct{}
+
+func (testAllowWalletGate) AssertZeroBalance(context.Context, string) error {
+	return nil
+}
 
 func newTestRouter(tb *testing.T, repository domainuser.Repository) http.Handler {
 	tb.Helper()
@@ -28,15 +38,24 @@ func newTestRouter(tb *testing.T, repository domainuser.Repository) http.Handler
 		Secret: []byte(routerTestJWTSecret),
 		TTL:    time.Hour,
 	}
+	getUserUC := usecase.NewGetUserUseCase(repository)
 	userHandler := NewUserHandler(
 		usecase.NewCreateUserUseCase(repository, bcrypt.MinCost),
 		usecase.NewListUsersUseCase(repository),
-		usecase.NewGetUserUseCase(repository),
+		getUserUC,
 		usecase.NewUpdateUserUseCase(repository, bcrypt.MinCost),
-		usecase.NewDeleteUserUseCase(repository),
+		usecase.NewDeleteUserUseCase(repository, testAllowWalletGate{}),
 	)
 	authHandler := NewAuthHandler(usecase.NewAuthenticateUserUseCase(repository, tokenIssuer))
-	return NewRouter(userHandler, authHandler, []byte(routerTestJWTSecret), nil)
+	internalUserHandler := NewInternalUserHandler(getUserUC)
+	return NewRouter(
+		userHandler,
+		authHandler,
+		internalUserHandler,
+		[]byte(routerTestJWTSecret),
+		[]byte(routerTestInternalJWTSecret),
+		nil,
+	)
 }
 
 func mintValidToken(tb *testing.T, subject string) string {
@@ -348,6 +367,72 @@ func TestRouter_user_scoped_routes_require_matching_subject(tb *testing.T) {
 		}
 		if responseRecorder.Body.Len() != 0 {
 			t.Fatalf("expected empty body for 204, got %q", responseRecorder.Body.String())
+		}
+	})
+}
+
+func mintInternalServiceToken(tb *testing.T, subject, audience string) string {
+	tb.Helper()
+	now := time.Now()
+	claims := jwt.RegisteredClaims{
+		Subject:   subject,
+		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour)),
+		IssuedAt:  jwt.NewNumericDate(now),
+		Audience:  jwt.ClaimStrings{audience},
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	s, err := tok.SignedString([]byte(routerTestInternalJWTSecret))
+	if err != nil {
+		tb.Fatalf("sign internal token: %v", err)
+	}
+	return s
+}
+
+func TestRouter_internal_get_user(t *testing.T) {
+	t.Parallel()
+	userID := "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"
+
+	t.Run("missing_authorization_returns_401", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := domainusermocks.NewMockRepository(controller)
+		router := newTestRouter(t, mockRepository)
+		req := httptest.NewRequest(http.MethodGet, "/internal/users/"+userID, nil)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status: got %d", rec.Code)
+		}
+	})
+
+	t.Run("valid_internal_token_and_active_user_returns_200", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := domainusermocks.NewMockRepository(controller)
+		mockRepository.EXPECT().FindByID(gomock.Any(), userID).Return(&domainuser.User{
+			ID: userID, FirstName: "Ada", LastName: "Lovelace", Email: "a@b.c", Password: "x",
+		}, nil)
+		router := newTestRouter(t, mockRepository)
+		req := httptest.NewRequest(http.MethodGet, "/internal/users/"+userID, nil)
+		req.Header.Set("Authorization", "Bearer "+mintInternalServiceToken(t, InternalCallerTransactions, InternalAudienceUsers))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status: got %d body: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("wrong_subject_returns_401", func(t *testing.T) {
+		t.Parallel()
+		controller := gomock.NewController(t)
+		mockRepository := domainusermocks.NewMockRepository(controller)
+		router := newTestRouter(t, mockRepository)
+		req := httptest.NewRequest(http.MethodGet, "/internal/users/"+userID, nil)
+		req.Header.Set("Authorization", "Bearer "+mintInternalServiceToken(t, "evil-caller", InternalAudienceUsers))
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("status: got %d", rec.Code)
 		}
 	})
 }

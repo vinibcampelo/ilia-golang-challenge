@@ -16,6 +16,7 @@ import (
 	"ilia-golang-challenge/services/ms-transactions/internal/infrastructure/db"
 	"ilia-golang-challenge/services/ms-transactions/internal/infrastructure/httpapi"
 	"ilia-golang-challenge/services/ms-transactions/internal/infrastructure/persistence"
+	"ilia-golang-challenge/services/ms-transactions/internal/infrastructure/userdirectory"
 )
 
 func main() {
@@ -89,11 +90,25 @@ func loadSwaggerSpecBytesOrNil(openAPISpecPath string) []byte {
 
 func buildRouter(dbConn *sql.DB, configuration config.Config, openAPISpecBytes []byte) http.Handler {
 	jwtSecret := []byte(configuration.JWTSecret)
+	internalSecret := []byte(configuration.JWTInternalSecret)
 	repository := persistence.NewPostgresTransactionRepository(dbConn)
-	handler := httpapi.NewTransactionHandler(
-		usecase.NewCreateTransactionUseCase(repository),
-		usecase.NewListTransactionsUseCase(repository),
-		usecase.NewGetBalanceUseCase(repository),
+	balanceUC := usecase.NewGetBalanceUseCase(repository)
+	userGate := userdirectory.NewHTTPUserActiveGate(
+		configuration.UsersServiceBaseURL,
+		internalSecret,
+		configuration.UsersServiceTimeout,
 	)
-	return httpapi.NewRouter(handler, jwtSecret, openAPISpecBytes)
+	handler := httpapi.NewTransactionHandler(
+		usecase.NewCreateTransactionUseCase(repository, userGate),
+		usecase.NewListTransactionsUseCase(repository),
+		balanceUC,
+	)
+	internalWallet := httpapi.NewInternalWalletHandler(balanceUC)
+	return httpapi.NewRouter(
+		handler,
+		internalWallet,
+		jwtSecret,
+		internalSecret,
+		openAPISpecBytes,
+	)
 }

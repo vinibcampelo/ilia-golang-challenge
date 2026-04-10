@@ -61,6 +61,10 @@ func (h *TransactionHandler) PostTransaction(w http.ResponseWriter, r *http.Requ
 		switch {
 		case errors.Is(err, usecase.ErrInvalidUserID):
 			http.Error(w, usecase.ErrInvalidUserID.Error(), http.StatusBadRequest)
+		case errors.Is(err, usecase.ErrUserNotActive):
+			http.Error(w, usecase.ErrUserNotActive.Error(), http.StatusForbidden)
+		case errors.Is(err, usecase.ErrUsersServiceUnavailable):
+			http.Error(w, usecase.ErrUsersServiceUnavailable.Error(), http.StatusServiceUnavailable)
 		case errors.Is(err, usecase.ErrForbiddenUser):
 			http.Error(w, usecase.ErrForbiddenUser.Error(), http.StatusForbidden)
 		case errors.Is(err, usecase.ErrInvalidTransactionType):
