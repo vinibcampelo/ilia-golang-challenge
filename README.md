@@ -10,6 +10,7 @@ A estrutura deste documento segue uma ordem habitual em READMEs de software: **o
 - [Início rápido (Docker)](#início-rápido-docker)
 - [Portas e stacks](#portas-e-stacks-valores-por-omissão)
 - [Configuração e JWT](#configuração-e-jwt)
+- [Autenticação dupla e comunicação interna](#autenticação-dupla-e-comunicação-interna)
 - [Makefile na raiz](#makefile-na-raiz)
 - [Docker e Make por serviço](#docker-e-make-por-serviço)
 - [Desenvolvimento sem Docker (API no host)](#desenvolvimento-sem-docker-api-no-host)
@@ -106,6 +107,34 @@ A porta **5433** no host para transações evita colisão com o Postgres do ms-u
 Cada API usa o seu ficheiro **`.env`** dentro da pasta do serviço (`services/ms-users/.env`, `services/ms-transactions/.env`). Variáveis e exemplos completos: [`services/ms-users/.env.example`](services/ms-users/.env.example) e [`services/ms-transactions/.env.example`](services/ms-transactions/.env.example).
 
 **Obrigatório para o fluxo users → carteira:** o valor de **`JWT_SECRET`** tem de ser **idêntico** nos dois `.env`. Caso contrário, o `access_token` devolvido por `POST /auth` no ms-users não será aceite no ms-transactions. O valor por omissão nos exemplos é o mesmo (`change-me-in-production`); altere em **ambos** os ficheiros se mudar num deles.
+
+**Obrigatório para chamadas internas entre APIs:** **`JWT_INTERNAL_SECRET`** (mesmo valor nos dois serviços, **distinto** de `JWT_SECRET`), mais **`TRANSACTIONS_SERVICE_BASE_URL`** no ms-users e **`USERS_SERVICE_BASE_URL`** no ms-transactions. Detalhes em [Autenticação dupla e comunicação interna](#autenticação-dupla-e-comunicação-interna).
+
+---
+
+## Autenticação dupla e comunicação interna
+
+O [`challenge.md`](challenge.md) distingue a segurança **exposta a clientes** da segurança **entre microsserviços**. Neste repositório a correspondência é:
+
+| Enunciado (challenge) | Variável aqui | Uso |
+|------------------------|---------------|-----|
+| `ILIACHALLENGE` | `JWT_SECRET` | JWT do **utilizador** (login no ms-users; `Authorization: Bearer` nas rotas públicas). |
+| `ILIACHALLENGE_INTERNAL` | `JWT_INTERNAL_SECRET` | JWT **curto**, emitido por cada serviço ao chamar o outro; **só** nas rotas `GET /internal/...`. Não reutilizar o access token do utilizador. |
+
+### Regras de negócio (REST entre serviços)
+
+| Fluxo | Quem chama quem | Rota interna | Efeito na API pública |
+|-------|-----------------|--------------|------------------------|
+| **A** — criar transação | ms-transactions → ms-users | `GET /internal/users/{id}` | Utilizador inexistente ou soft-deleted → **403** no `POST /transactions`. Falha de rede / 5xx no ms-users → **503**. |
+| **B** — apagar conta | ms-users → ms-transactions | `GET /internal/wallet/{userId}/balance` | Resposta JSON com campo `balance` (inteiro, unidades mínimas). Saldo **0** → `DELETE /users/{id}` pode concluir (**204**). Saldo ≠ 0 → **409**. Falha no ms-transactions → **503**. |
+
+A definição de “saldo zero” é a **mesma** que a do saldo público (soma das transações em unidades mínimas).
+
+As rotas `/internal/...` **não** constam do OpenAPI público; destinam-se a tráfego entre serviços na mesma rede de confiança (por exemplo Docker ou `localhost` em desenvolvimento).
+
+### Docker: duas stacks Compose
+
+Os `docker-compose.yml` ligam as APIs à rede externa partilhada **`ilia-challenge-internal`** (criada automaticamente em `make up` / `make -C services/… up`). Os contentores têm nomes estáveis **`ilia-ms-users`** e **`ilia-ms-transactions`**. As URLs HTTP entre APIs no Compose estão **fixas no YAML** (`http://ilia-ms-transactions:3001` e `http://ilia-ms-users:3002`). O **`PORT` dentro do contentor** da API também é fixo (**3001** / **3002**) para coincidir com essas URLs; a porta publicada no host usa **`MS_TRANSACTIONS_HOST_PORT`** e **`MS_USERS_HOST_PORT`** (omissão 3001 / 3002), para não haver dessincronia quando o `.env` trazia outro `PORT`. Com **`make run`** no host, o `.env` com `PORT` e `localhost` para o outro serviço continua a aplicar-se só ao processo no host.
 
 ---
 

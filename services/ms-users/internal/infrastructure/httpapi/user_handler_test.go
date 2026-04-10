@@ -21,12 +21,13 @@ import (
 )
 
 func newUserHandlerWithRepository(repository domainuser.Repository) *UserHandler {
+	getUserUC := usecase.NewGetUserUseCase(repository)
 	return NewUserHandler(
 		usecase.NewCreateUserUseCase(repository, bcrypt.MinCost),
 		usecase.NewListUsersUseCase(repository),
-		usecase.NewGetUserUseCase(repository),
+		getUserUC,
 		usecase.NewUpdateUserUseCase(repository, bcrypt.MinCost),
-		usecase.NewDeleteUserUseCase(repository),
+		usecase.NewDeleteUserUseCase(repository, testAllowWalletGate{}),
 	)
 }
 

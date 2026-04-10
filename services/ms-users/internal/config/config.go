@@ -11,17 +11,18 @@ import (
 )
 
 type Config struct {
-	HTTPAddr        string
-	OpenAPISpecPath string
-	DatabaseURL     string
-	DBPingTimeout   time.Duration
-	BcryptCost      int
-	JWTSecret       string
-	JWTExpiration   time.Duration
+	HTTPAddr                     string
+	OpenAPISpecPath              string
+	DatabaseURL                  string
+	DBPingTimeout                time.Duration
+	BcryptCost                   int
+	JWTSecret                    string
+	JWTExpiration                time.Duration
+	JWTInternalSecret            string
+	TransactionsServiceBaseURL   string
+	TransactionsServiceTimeout time.Duration
 }
 
-// Load reads configuration from the process environment (populate from a .env file via godotenv in main).
-// Required: PORT, DATABASE_URL, JWT_SECRET. Optional keys are documented in .env.example.
 func Load() (Config, error) {
 	httpPort, err := requiredEnvironmentVariable("PORT")
 	if err != nil {
@@ -41,14 +42,27 @@ func Load() (Config, error) {
 	}
 	jwtExpiration := durationFromEnvironmentOrDefault("JWT_EXPIRATION", 24*time.Hour)
 
+	jwtInternalSecret, err := requiredEnvironmentVariable("JWT_INTERNAL_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	transactionsBaseURL, err := requiredEnvironmentVariable("TRANSACTIONS_SERVICE_BASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	transactionsTimeout := durationFromEnvironmentOrDefault("TRANSACTIONS_SERVICE_TIMEOUT", 5*time.Second)
+
 	return Config{
-		HTTPAddr:        fmt.Sprintf(":%s", httpPort),
-		OpenAPISpecPath: openAPISpecPath,
-		DatabaseURL:     databaseURL,
-		DBPingTimeout:   pingTimeout,
-		BcryptCost:      bcryptCostFromEnvironment(),
-		JWTSecret:       jwtSecret,
-		JWTExpiration:   jwtExpiration,
+		HTTPAddr:                     fmt.Sprintf(":%s", httpPort),
+		OpenAPISpecPath:              openAPISpecPath,
+		DatabaseURL:                  databaseURL,
+		DBPingTimeout:                pingTimeout,
+		BcryptCost:                   bcryptCostFromEnvironment(),
+		JWTSecret:                    jwtSecret,
+		JWTExpiration:                jwtExpiration,
+		JWTInternalSecret:            jwtInternalSecret,
+		TransactionsServiceBaseURL:   strings.TrimRight(transactionsBaseURL, "/"),
+		TransactionsServiceTimeout: transactionsTimeout,
 	}, nil
 }
 

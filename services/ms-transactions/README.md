@@ -20,8 +20,17 @@ Montantes na API e no banco são **inteiros em unidades mínimas da moeda** (ex.
 |----------|-------------|-----------|
 | `PORT` | Sim | Porta HTTP (ex.: **3001**). |
 | `DATABASE_URL` | Sim | URL Postgres (`pgx` / `database/sql`). |
-| `JWT_SECRET` | Sim | Deve coincidir com o **ms-users** para aceitar o mesmo `access_token`. |
+| `JWT_SECRET` | Sim | Deve coincidir com o **ms-users** para aceitar o mesmo `access_token` (equivale ao `ILIACHALLENGE` do enunciado). |
+| `JWT_INTERNAL_SECRET` | Sim | Segredo **distinto** de `JWT_SECRET`, partilhado com o ms-users para JWT só nas rotas internas (`ILIACHALLENGE_INTERNAL` no enunciado). |
+| `USERS_SERVICE_BASE_URL` | Sim | URL base do ms-users (ex.: `http://localhost:3002` no host; em Compose ver [README na raiz](../../README.md#autenticação-dupla-e-comunicação-interna)). |
+| `USERS_SERVICE_TIMEOUT` | Não | Timeout do cliente HTTP para a verificação de utilizador ativo (omissão: `5s`). |
 | `OPENAPI_SPEC` | Não | Caminho do OpenAPI; vazio desativa Swagger UI. |
+
+### Comunicação interna (ms-transactions)
+
+- **`GET /internal/wallet/{userId}/balance`** — Protegida por Bearer com JWT assinado com `JWT_INTERNAL_SECRET` e audience esperada. Resposta **200** com JSON `{"balance": <int64>}` (unidades mínimas, mesma lógica que `GET /balance` público). Destina-se ao ms-users antes do soft delete (fluxo B no [README da raiz](../../README.md#autenticação-dupla-e-comunicação-interna)).
+
+Antes de persistir uma nova linha em **`POST /transactions`**, o serviço chama o ms-users em **`GET /internal/users/{userId}`**. Utilizador inexistente ou apagado (soft delete) → **403 Forbidden**; falha de rede ou 5xx no ms-users → **503 Service Unavailable**. O corpo continua a exigir `user_id` igual ao `sub` do JWT do utilizador.
 
 ## Executar localmente (sem Docker)
 

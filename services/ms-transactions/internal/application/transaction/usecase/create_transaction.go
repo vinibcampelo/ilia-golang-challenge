@@ -12,10 +12,11 @@ import (
 
 type CreateTransactionUseCase struct {
 	repo domaintransaction.Repository
+	gate UserActiveGate
 }
 
-func NewCreateTransactionUseCase(repo domaintransaction.Repository) *CreateTransactionUseCase {
-	return &CreateTransactionUseCase{repo: repo}
+func NewCreateTransactionUseCase(repo domaintransaction.Repository, gate UserActiveGate) *CreateTransactionUseCase {
+	return &CreateTransactionUseCase{repo: repo, gate: gate}
 }
 
 type CreateTransactionInput struct {
@@ -37,6 +38,9 @@ func (uc *CreateTransactionUseCase) Execute(ctx context.Context, in CreateTransa
 	}
 	if in.BodyUserID != in.SubjectUserID {
 		return nil, ErrForbiddenUser
+	}
+	if err := uc.gate.EnsureActive(ctx, in.BodyUserID); err != nil {
+		return nil, err
 	}
 	txType, err := domaintransaction.ParseType(in.Type)
 	if err != nil {

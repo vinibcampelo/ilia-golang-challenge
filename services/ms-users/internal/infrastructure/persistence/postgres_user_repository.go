@@ -8,7 +8,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
-	"ilia-golang-challenge/services/ms-users/internal/application/user/usecase"
 	domainuser "ilia-golang-challenge/services/ms-users/internal/domain/user"
 )
 
@@ -38,7 +37,7 @@ func (r *PostgresUserRepository) Save(ctx context.Context, userEntity *domainuse
 	`, userEntity.ID, userEntity.FirstName, userEntity.LastName, userEntity.Email, userEntity.Password)
 	if err != nil {
 		if isPostgresUniqueViolationError(err) {
-			return fmt.Errorf("save user: %w", usecase.ErrEmailAlreadyExists)
+			return fmt.Errorf("save user: %w", domainuser.ErrEmailAlreadyExists)
 		}
 		return fmt.Errorf("save user: %w", err)
 	}
@@ -57,7 +56,7 @@ func (r *PostgresUserRepository) FindByID(ctx context.Context, userID string) (*
 	var foundUser domainuser.User
 	if err := row.Scan(&foundUser.ID, &foundUser.FirstName, &foundUser.LastName, &foundUser.Email, &foundUser.Password); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("find user: %w", usecase.ErrNotFound)
+			return nil, fmt.Errorf("find user: %w", domainuser.ErrNotFound)
 		}
 		return nil, fmt.Errorf("find user: %w", err)
 	}
@@ -76,7 +75,7 @@ func (r *PostgresUserRepository) FindByEmail(ctx context.Context, email string) 
 	var foundUser domainuser.User
 	if err := row.Scan(&foundUser.ID, &foundUser.FirstName, &foundUser.LastName, &foundUser.Email, &foundUser.Password); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("find user by email: %w", usecase.ErrNotFound)
+			return nil, fmt.Errorf("find user by email: %w", domainuser.ErrNotFound)
 		}
 		return nil, fmt.Errorf("find user by email: %w", err)
 	}
@@ -126,7 +125,7 @@ func (r *PostgresUserRepository) Update(ctx context.Context, userEntity *domainu
 	`, userEntity.FirstName, userEntity.LastName, userEntity.Email, userEntity.Password, userEntity.ID)
 	if err != nil {
 		if isPostgresUniqueViolationError(err) {
-			return fmt.Errorf("update user: %w", usecase.ErrEmailAlreadyExists)
+			return fmt.Errorf("update user: %w", domainuser.ErrEmailAlreadyExists)
 		}
 		return fmt.Errorf("update user: %w", err)
 	}
@@ -135,7 +134,7 @@ func (r *PostgresUserRepository) Update(ctx context.Context, userEntity *domainu
 		return fmt.Errorf("update user: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("update user: %w", usecase.ErrNotFound)
+		return fmt.Errorf("update user: %w", domainuser.ErrNotFound)
 	}
 	return nil
 }
@@ -157,7 +156,7 @@ func (r *PostgresUserRepository) DeleteByID(ctx context.Context, userID string) 
 		return fmt.Errorf("delete user: %w", err)
 	}
 	if rowsAffected == 0 {
-		return fmt.Errorf("delete user: %w", usecase.ErrNotFound)
+		return fmt.Errorf("delete user: %w", domainuser.ErrNotFound)
 	}
 	return nil
 }

@@ -17,6 +17,7 @@ import (
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/httpapi"
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/jwtissuer"
 	"ilia-golang-challenge/services/ms-users/internal/infrastructure/persistence"
+	"ilia-golang-challenge/services/ms-users/internal/infrastructure/walletclient"
 )
 
 func main() {
@@ -95,13 +96,27 @@ func buildRouter(dbConn *sql.DB, configuration config.Config, openAPISpecBytes [
 		Secret: jwtSecret,
 		TTL:    configuration.JWTExpiration,
 	}
+	walletGate := walletclient.NewHTTPWalletZeroBalanceChecker(
+		configuration.TransactionsServiceBaseURL,
+		[]byte(configuration.JWTInternalSecret),
+		configuration.TransactionsServiceTimeout,
+	)
+	getUserUC := usecase.NewGetUserUseCase(repository)
 	userHandler := httpapi.NewUserHandler(
 		usecase.NewCreateUserUseCase(repository, configuration.BcryptCost),
 		usecase.NewListUsersUseCase(repository),
-		usecase.NewGetUserUseCase(repository),
+		getUserUC,
 		usecase.NewUpdateUserUseCase(repository, configuration.BcryptCost),
-		usecase.NewDeleteUserUseCase(repository),
+		usecase.NewDeleteUserUseCase(repository, walletGate),
 	)
 	authHandler := httpapi.NewAuthHandler(usecase.NewAuthenticateUserUseCase(repository, tokenIssuer))
-	return httpapi.NewRouter(userHandler, authHandler, jwtSecret, openAPISpecBytes)
+	internalUserHandler := httpapi.NewInternalUserHandler(getUserUC)
+	return httpapi.NewRouter(
+		userHandler,
+		authHandler,
+		internalUserHandler,
+		jwtSecret,
+		[]byte(configuration.JWTInternalSecret),
+		openAPISpecBytes,
+	)
 }

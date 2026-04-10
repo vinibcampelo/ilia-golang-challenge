@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -32,6 +33,15 @@ func writeUnauthorized(w http.ResponseWriter) {
 
 func writeForbidden(w http.ResponseWriter) {
 	http.Error(w, forbiddenDescription, http.StatusForbidden)
+}
+
+func claimStringsContains(aud jwt.ClaimStrings, want string) bool {
+	for _, a := range aud {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
 
 func bearerTokenFromAuthorizationHeader(rawHeader string) (string, bool) {
@@ -72,5 +82,44 @@ func JWTBearerMiddleware(secret []byte, next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(WithSubject(r.Context(), claims.Subject)))
+	})
+}
+
+func InternalJWTBearerMiddleware(secret []byte, expectedAudience, expectedSubject string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(secret) == 0 {
+			writeUnauthorized(w)
+			return
+		}
+		tokenString, ok := bearerTokenFromAuthorizationHeader(r.Header.Get("Authorization"))
+		if !ok {
+			writeUnauthorized(w)
+			return
+		}
+		parser := jwt.NewParser(
+			jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+			jwt.WithLeeway(5*time.Second),
+		)
+		claims := &jwt.RegisteredClaims{}
+		token, err := parser.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
+			return secret, nil
+		})
+		if err != nil || !token.Valid {
+			writeUnauthorized(w)
+			return
+		}
+		if claims.ExpiresAt == nil || claims.ExpiresAt.Before(time.Now().Add(-5*time.Second)) {
+			writeUnauthorized(w)
+			return
+		}
+		if expectedAudience != "" && !claimStringsContains(claims.Audience, expectedAudience) {
+			writeUnauthorized(w)
+			return
+		}
+		if expectedSubject != "" && claims.Subject != expectedSubject {
+			writeUnauthorized(w)
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }

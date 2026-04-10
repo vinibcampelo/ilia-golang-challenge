@@ -6,7 +6,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// HS256AccessTokenIssuer issues JWT access tokens with HS256; subject claim is the user id.
 type HS256AccessTokenIssuer struct {
 	Secret []byte
 	TTL    time.Duration

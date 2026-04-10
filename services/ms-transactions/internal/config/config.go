@@ -8,15 +8,16 @@ import (
 )
 
 type Config struct {
-	HTTPAddr        string
-	OpenAPISpecPath string
-	DatabaseURL     string
-	DBPingTimeout   time.Duration
-	JWTSecret       string
+	HTTPAddr               string
+	OpenAPISpecPath        string
+	DatabaseURL            string
+	DBPingTimeout          time.Duration
+	JWTSecret              string
+	JWTInternalSecret      string
+	UsersServiceBaseURL    string
+	UsersServiceTimeout    time.Duration
 }
 
-// Load reads configuration from the process environment (populate from a .env file via godotenv in main).
-// Required: PORT, DATABASE_URL, JWT_SECRET. Optional keys are documented in .env.example.
 func Load() (Config, error) {
 	httpPort, err := requiredEnvironmentVariable("PORT")
 	if err != nil {
@@ -35,12 +36,25 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	jwtInternalSecret, err := requiredEnvironmentVariable("JWT_INTERNAL_SECRET")
+	if err != nil {
+		return Config{}, err
+	}
+	usersBaseURL, err := requiredEnvironmentVariable("USERS_SERVICE_BASE_URL")
+	if err != nil {
+		return Config{}, err
+	}
+	usersTimeout := durationFromEnvironmentOrDefault("USERS_SERVICE_TIMEOUT", 5*time.Second)
+
 	return Config{
-		HTTPAddr:        fmt.Sprintf(":%s", httpPort),
-		OpenAPISpecPath: openAPISpecPath,
-		DatabaseURL:     databaseURL,
-		DBPingTimeout:   pingTimeout,
-		JWTSecret:       jwtSecret,
+		HTTPAddr:            fmt.Sprintf(":%s", httpPort),
+		OpenAPISpecPath:     openAPISpecPath,
+		DatabaseURL:         databaseURL,
+		DBPingTimeout:       pingTimeout,
+		JWTSecret:           jwtSecret,
+		JWTInternalSecret:   jwtInternalSecret,
+		UsersServiceBaseURL: strings.TrimRight(usersBaseURL, "/"),
+		UsersServiceTimeout: usersTimeout,
 	}, nil
 }
 

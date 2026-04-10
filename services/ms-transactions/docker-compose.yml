@@ -14,8 +14,11 @@ services:
       interval: 3s
       timeout: 3s
       retries: 10
+    networks:
+      - default
 
   ms-transactions:
+    container_name: ilia-ms-transactions
     build:
       context: ../..
       dockerfile: services/ms-transactions/Dockerfile
@@ -23,12 +26,25 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      PORT: ${PORT:-3001}
+      # Fixed listen port inside the mesh so cross-service URLs stay ilia-ms-transactions:3001 / ilia-ms-users:3002.
+      PORT: "3001"
       DATABASE_URL: postgres://${POSTGRES_USER:-transactions}:${POSTGRES_PASSWORD:-transactions}@postgres:5432/${POSTGRES_DB:-transactions}?sslmode=disable
       OPENAPI_SPEC: /app/ms-transactions.yaml
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      JWT_INTERNAL_SECRET: ${JWT_INTERNAL_SECRET:-change-me-internal-jwt}
+      # Fixed for container-to-container calls; not taken from .env (avoids localhost breaking POST /transactions gate).
+      USERS_SERVICE_BASE_URL: http://ilia-ms-users:3002
+      USERS_SERVICE_TIMEOUT: ${USERS_SERVICE_TIMEOUT:-5s}
     ports:
-      - "${PORT:-3001}:${PORT:-3001}"
+      - "${MS_TRANSACTIONS_HOST_PORT:-3001}:3001"
+    networks:
+      - default
+      - ilia_internal
+
+networks:
+  ilia_internal:
+    name: ilia-challenge-internal
+    external: true
 
 volumes:
   pgdata_transactions:

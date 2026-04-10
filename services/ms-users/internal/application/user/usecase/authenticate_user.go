@@ -10,7 +10,6 @@ import (
 	domainuser "ilia-golang-challenge/services/ms-users/internal/domain/user"
 )
 
-// AccessTokenIssuer signs JWT access tokens; subject must be the authenticated user's id.
 type AccessTokenIssuer interface {
 	IssueAccessToken(subjectUserID string) (string, error)
 }

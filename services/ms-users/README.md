@@ -23,8 +23,18 @@ Variáveis principais (detalhes e opcionais em [`.env.example`](.env.example)):
 |----------|-------------|-----------|
 | `PORT` | Sim | Porta HTTP (ex.: `3002`). |
 | `DATABASE_URL` | Sim | URL Postgres (driver `pgx` via `database/sql`). |
+| `JWT_SECRET` | Sim | Segredo HS256 para tokens de **utilizador** (login); deve coincidir com o ms-transactions para o mesmo `access_token`. Equivale ao `ILIACHALLENGE` do enunciado. |
+| `JWT_INTERNAL_SECRET` | Sim | Segredo **distinto** de `JWT_SECRET`, partilhado com o ms-transactions só para JWT entre serviços (`ILIACHALLENGE_INTERNAL` no enunciado). |
+| `TRANSACTIONS_SERVICE_BASE_URL` | Sim | URL base do ms-transactions (ex.: `http://localhost:3001` no host; em Compose ver [README na raiz](../../README.md#autenticação-dupla-e-comunicação-interna)). |
+| `TRANSACTIONS_SERVICE_TIMEOUT` | Não | Timeout do cliente HTTP para a verificação de saldo antes do delete (omissão: `5s`). |
 | `OPENAPI_SPEC` | Não | Caminho do arquivo OpenAPI; vazio desativa Swagger UI. |
 | `DOTENV_FILE` | Não | Arquivo carregado pelo `godotenv` (o `make run` define; ver abaixo). |
+
+### Comunicação interna (ms-users)
+
+- **`GET /internal/users/{id}`** — Protegida por Bearer com JWT assinado com `JWT_INTERNAL_SECRET` e audience esperada pelo serviço. Resposta **200** com JSON mínimo (`id`, `active: true`) se o utilizador existe e não está soft-deleted; **404** caso contrário. Não expõe email nem password. Destina-se ao ms-transactions (fluxo A no [README da raiz](../../README.md#autenticação-dupla-e-comunicação-interna)).
+
+Antes de **`DELETE /users/{id}`** (soft delete), o serviço consulta o ms-transactions em **`GET /internal/wallet/{userId}/balance`**. Se o saldo consolidado (unidades mínimas) for **zero**, o delete prossegue (**204**). Saldo não zero → **409 Conflict**; indisponibilidade do ms-transactions → **503**.
 
 ## Executar localmente (sem Docker)
 

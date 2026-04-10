@@ -146,6 +146,14 @@ func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, usecase.ErrNotFound.Error(), http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, usecase.ErrWalletHasNonZeroBalance) {
+			http.Error(w, usecase.ErrWalletHasNonZeroBalance.Error(), http.StatusConflict)
+			return
+		}
+		if errors.Is(err, usecase.ErrWalletServiceUnavailable) {
+			http.Error(w, usecase.ErrWalletServiceUnavailable.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		respondInternalServerError(w)
 		return
 	}
